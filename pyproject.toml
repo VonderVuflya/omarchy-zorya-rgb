@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omarchy-zorya-rgb"
+version = "0.1.0"
+description = "Native Omarchy RGB controls with per-user OpenRGB adapters"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+authors = [{name = "Zorya contributors"}]
+dependencies = []
+
+[project.optional-dependencies]
+hardware = ["openrgb-python==0.3.6"]
+
+[project.scripts]
+zorya-rgb = "zorya_rgb.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["zorya_rgb*"]

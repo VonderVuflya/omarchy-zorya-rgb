@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Portable checkout launcher; installed environments use the console entrypoint."""
+from pathlib import Path
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
+from zorya_rgb.cli import main
+sys.exit(main())

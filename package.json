@@ -1,0 +1,16 @@
+{
+  "name": "omarchy-zorya-rgb",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenSpec development tooling for the ZoryaRGB Omarchy plugin",
+  "scripts": {
+    "spec:validate": "openspec validate initial-zorya-rgb --strict",
+    "spec:list": "openspec list"
+  },
+  "devDependencies": {
+    "@fission-ai/openspec": "1.14.2"
+  },
+  "overrides": {
+    "fast-glob": "3.3.3"
+  }
+}

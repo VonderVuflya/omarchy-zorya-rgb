@@ -1,0 +1,12 @@
+[Unit]
+Description=ZoryaRGB state and effects daemon
+After=graphical-session-pre.target
+
+[Service]
+Type=simple
+ExecStart=@ZORYA_LAUNCHER@ daemon
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

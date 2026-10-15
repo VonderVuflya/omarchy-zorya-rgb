@@ -1,0 +1,1225 @@
+diff --git a/crates/lianli-daemon/src/fan_controller.rs b/crates/lianli-daemon/src/fan_controller.rs
+--- a/crates/lianli-daemon/src/fan_controller.rs
++++ b/crates/lianli-daemon/src/fan_controller.rs
+@@ -265,8 +265,8 @@
+             ) {
+                 Ok(speeds) => speeds,
+                 Err(err) => {
+-                    warn!("Fan speed calculation failed for group {group_idx}: {err}");
+-                    continue;
++                    warn!("Fan speed calculation failed for group {group_idx}: {err}; using full speed");
++                    [255; 4]
+                 }
+             };
+ 
+@@ -352,14 +352,14 @@
+     };
+     // Extract MAC from "wireless:AA:BB:CC:DD:EE:FF"
+     let mac_str = device_id.strip_prefix("wireless:").unwrap_or(device_id);
+-    // Find the device by MAC and get its list_index
+-    let devices = w.devices();
+-    if let Some(dev) = devices.iter().find(|d| d.mac_str() == mac_str) {
+-        if let Err(err) = w.set_fan_speeds(dev.list_index, speeds) {
+-            warn!("Failed to set fan speeds for {device_id}: {err}");
+-        }
+-    } else {
+-        warn!("Fan group {group_idx}: wireless device {device_id} not discovered");
++    // Address by MAC throughout; discovery order can change between polls.
++    let mac: Vec<u8> = mac_str.split(':').filter_map(|b| u8::from_str_radix(b, 16).ok()).collect();
++    let Ok(mac) = <[u8; 6]>::try_from(mac) else {
++        warn!("Fan group {group_idx}: invalid device MAC {device_id}");
++        return;
++    };
++    if let Err(err) = w.set_fan_speeds_by_mac(&mac, speeds) {
++        warn!("Failed to set fan speeds for {device_id}: {err}");
+     }
+ }
+ 
+@@ -428,6 +428,7 @@
+     hysteresis_pwm: u8,
+ ) -> Result<[u8; 4]> {
+     let mut pwm_values = [0u8; 4];
++    let mut tick_temps = HashMap::new();
+ 
+     for (i, fan_speed) in fan_speeds.iter().enumerate() {
+         pwm_values[i] = match fan_speed {
+@@ -445,7 +446,14 @@
+                     .ok_or_else(|| anyhow::anyhow!("Curve '{curve_name}' not found"))?;
+ 
+                 let source = curve.effective_source();
+-                let temp = smoothed_temperature(&source, sensor_cache, temp_ema, all_sensors)?;
++                let temp = match tick_temps.get(&source) {
++                    Some(temp) => *temp,
++                    None => {
++                        let temp = smoothed_temperature(&source, sensor_cache, temp_ema, all_sensors)?;
++                        tick_temps.insert(source.clone(), temp);
++                        temp
++                    }
++                };
+                 let speed_percent = interpolate_curve(&curve.curve, temp);
+                 let target_pwm = (speed_percent * 2.55) as u8;
+ 
+@@ -487,6 +495,10 @@
+         }
+     };
+ 
++    if let ResolvedSensor::RuntimeFile(path) = &resolved {
++        let age = std::fs::metadata(path)?.modified()?.elapsed()?;
++        anyhow::ensure!(age < Duration::from_secs(10), "coolant telemetry is stale");
++    }
+     match sensors::read_sensor_value(&resolved) {
+         Ok(temp) if temp > 0.0 && temp <= 100.0 => {
+             let smoothed = match ema.get(source) {
+@@ -496,11 +508,12 @@
+             ema.insert(source.clone(), smoothed);
+         }
+         Ok(temp) => {
+-            debug!("Ignoring out-of-range temperature {temp:.1}°C");
++            anyhow::bail!("Out-of-range temperature {temp:.1}°C");
+         }
+         Err(err) => {
+             debug!("Sensor read failed: {err}");
+             cache.remove(source);
++            return Err(err);
+         }
+     }
+ 
+@@ -541,3 +554,52 @@
+ 
+     50.0
+ }
++
++#[cfg(test)]
++mod resume_tests {
++    use super::*;
++    use std::fs::{File, FileTimes};
++    use std::time::SystemTime;
++
++    #[test]
++    fn stale_or_invalid_coolant_does_not_reuse_cached_temperature() {
++        let path = std::env::temp_dir().join(format!("lianli-fan-resume-test-{}", std::process::id()));
++        std::fs::write(&path, "34").unwrap();
++        let source = SensorSource::WirelessCoolant { device_id: "test".into() };
++        let mut cache = HashMap::from([(source.clone(), ResolvedSensor::RuntimeFile(path.clone()))]);
++        let mut ema = HashMap::new();
++        assert_eq!(smoothed_temperature(&source, &mut cache, &mut ema, &[]).unwrap(), 34.0);
++        File::options().write(true).open(&path).unwrap().set_times(
++            FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(20))
++        ).unwrap();
++        assert!(smoothed_temperature(&source, &mut cache, &mut ema, &[]).is_err());
++        std::fs::write(&path, "NaN").unwrap();
++        assert!(smoothed_temperature(&source, &mut cache, &mut ema, &[]).is_err());
++        std::fs::remove_file(path).unwrap();
++    }
++
++    #[test]
++    fn shared_sensor_is_smoothed_once_for_all_fan_slots() {
++        let path = std::env::temp_dir().join(format!("lianli-fan-slots-test-{}", std::process::id()));
++        std::fs::write(&path, "35").unwrap();
++        let source = SensorSource::WirelessCoolant { device_id: "slots".into() };
++        let mut cache = HashMap::from([(source.clone(), ResolvedSensor::RuntimeFile(path.clone()))]);
++        let mut ema = HashMap::from([(source.clone(), 25.0)]);
++        let curves = HashMap::from([("test".into(), FanCurve {
++            name: "test".into(), temp_source: Some(source), temp_command: String::new(),
++            curve: vec![(0.0, 0.0), (100.0, 100.0)],
++        })]);
++        let slots = std::array::from_fn(|_| FanSpeed::Curve("test".into()));
++        let pwm = calculate_fan_speeds(&slots, &curves, &mut cache, &mut ema, &[], None, 1.0, 5).unwrap();
++        assert_eq!(pwm, [71; 4]);
++        std::fs::remove_file(path).unwrap();
++    }
++
++    #[test]
++    fn coolant_curve_increases_speed_and_reaches_full_speed() {
++        let curve = [(25.0, 40.0), (30.0, 45.0), (35.0, 51.0), (38.0, 65.0), (42.0, 85.0), (45.0, 100.0)];
++        assert!((interpolate_curve(&curve, 34.0) - 49.8).abs() < 0.01);
++        assert_eq!(interpolate_curve(&curve, 40.0), 75.0);
++        assert_eq!(interpolate_curve(&curve, 50.0), 100.0);
++    }
++}
+diff --git a/crates/lianli-daemon/src/main.rs b/crates/lianli-daemon/src/main.rs
+--- a/crates/lianli-daemon/src/main.rs
++++ b/crates/lianli-daemon/src/main.rs
+@@ -33,6 +33,14 @@
+     #[arg(long, default_value_os_t = default_config_path())]
+     config: PathBuf,
+ 
++    /// Control wireless RGB only; leave wired devices, cooling settings and LCDs untouched.
++    #[arg(long)]
++    rgb_only: bool,
++
++    /// Also control explicitly configured wireless radiator fans in RGB-only mode.
++    #[arg(long, requires = "rgb_only")]
++    radiator_fans: bool,
++
+     /// Logging verbosity (error, warn, info, debug, trace)
+     #[arg(long, default_value = "info")]
+     log_level: String,
+@@ -50,7 +58,7 @@
+ 
+     let _pidlock = pidlock::PidLock::acquire()?;
+ 
+-    let mut manager = service::ServiceManager::new(cli.config)?;
++    let mut manager = service::ServiceManager::new(cli.config, cli.rgb_only, cli.radiator_fans)?;
+     let restart = manager.run()?;
+ 
+     if restart {
+@@ -58,7 +66,7 @@
+         let exe = std::env::current_exe()?;
+         let args: Vec<String> = std::env::args().skip(1).collect();
+         tracing::info!("Re-executing daemon: {} {}", exe.display(), args.join(" "));
+-        let err = std::process::Command::new(exe).args(args).exec();
++        let err = std::process::Command::new("/proc/self/exe").args(args).exec();
+         // exec() only returns on error
+         anyhow::bail!("Failed to re-exec daemon: {err}");
+     }
+diff --git a/crates/lianli-daemon/src/openrgb_server.rs b/crates/lianli-daemon/src/openrgb_server.rs
+--- a/crates/lianli-daemon/src/openrgb_server.rs
++++ b/crates/lianli-daemon/src/openrgb_server.rs
+@@ -7,6 +7,7 @@
+ use crate::rgb_controller::{DirectColorBuffer, RgbController};
+ use lianli_shared::rgb::{RgbDeviceCapabilities, RgbDirection, RgbEffect, RgbMode};
+ use parking_lot::Mutex;
++use std::collections::HashMap;
+ use std::io::{Read, Write};
+ use std::net::{TcpListener, TcpStream};
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+@@ -73,11 +74,12 @@
+     rgb: Arc<Mutex<RgbController>>,
+     direct_buffer: Arc<Mutex<DirectColorBuffer>>,
+     port: u16,
++    localhost_only: bool,
+     stop_flag: Arc<AtomicBool>,
+     state: Arc<Mutex<OpenRgbServerState>>,
+ ) -> thread::JoinHandle<()> {
+     thread::spawn(move || {
+-        if let Err(e) = run_server(rgb, direct_buffer, port, &stop_flag, &state) {
++        if let Err(e) = run_server(rgb, direct_buffer, port, localhost_only, &stop_flag, &state) {
+             error!("OpenRGB server error: {e}");
+             let mut s = state.lock();
+             s.running = false;
+@@ -94,10 +96,11 @@
+     rgb: Arc<Mutex<RgbController>>,
+     direct_buffer: Arc<Mutex<DirectColorBuffer>>,
+     port: u16,
++    localhost_only: bool,
+     stop_flag: &Arc<AtomicBool>,
+     state: &Arc<Mutex<OpenRgbServerState>>,
+ ) -> anyhow::Result<()> {
+-    let listener = match TcpListener::bind(format!("0.0.0.0:{port}")) {
++    let listener = match TcpListener::bind((if localhost_only { "127.0.0.1" } else { "0.0.0.0" }, port)) {
+         Ok(l) => l,
+         Err(e) => {
+             let msg = if e.kind() == std::io::ErrorKind::AddrInUse {
+@@ -129,7 +132,7 @@
+             Ok((stream, addr)) => {
+                 info!("OpenRGB client connected from {addr}");
+                 stream.set_nonblocking(false).ok();
+-                stream.set_read_timeout(Some(Duration::from_secs(300))).ok();
++                stream.set_read_timeout(Some(Duration::from_secs(1))).ok();
+                 stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+ 
+                 let rgb = Arc::clone(&rgb);
+@@ -179,6 +182,12 @@
+     /// Cached capabilities — avoids locking RgbController on every UpdateLEDs packet.
+     /// Populated lazily on first use; static for the lifetime of a connection.
+     cached_caps: Option<Vec<RgbDeviceCapabilities>>,
++    /// Direct-mode brightness (0..4) per device index, set by OpenRGB via UpdateMode.
++    /// Direct colors arrive pre-mixed, so we apply the scale ourselves.
++    direct_brightness: HashMap<u32, u8>,
++    /// Last unscaled Direct colors per device/zone. Kept so a brightness change
++    /// takes effect immediately instead of waiting for the next UpdateLEDs packet.
++    last_direct_colors: HashMap<u32, HashMap<u8, Vec<[u8; 3]>>>,
+ }
+ 
+ impl ClientHandler {
+@@ -196,6 +205,74 @@
+             protocol_version: 0,
+             client_name: String::new(),
+             cached_caps: None,
++            direct_brightness: HashMap::new(),
++            last_direct_colors: HashMap::new(),
++        }
++    }
++
++    /// Scale Direct colors by the device's brightness setting (4 = unchanged).
++    fn scale_direct(&self, dev_idx: u32, colors: &[[u8; 3]]) -> Vec<[u8; 3]> {
++        let bri = self.direct_brightness.get(&dev_idx).copied().unwrap_or(4);
++        if bri >= 4 {
++            return colors.to_vec();
++        }
++        let s = bri as u32;
++        colors
++            .iter()
++            .map(|c| {
++                [
++                    (c[0] as u32 * s / 4) as u8,
++                    (c[1] as u32 * s / 4) as u8,
++                    (c[2] as u32 * s / 4) as u8,
++                ]
++            })
++            .collect()
++    }
++
++    /// Re-send the last Direct colors with the current brightness applied.
++    fn reapply_direct(&mut self, dev_idx: u32) {
++        let Some(zones) = self.last_direct_colors.get(&dev_idx).cloned() else {
++            return;
++        };
++        let Some(device_id) = self
++            .caps()
++            .get(dev_idx as usize)
++            .map(|cap| cap.device_id.clone())
++        else {
++            return;
++        };
++
++        let scaled: Vec<(u8, Vec<[u8; 3]>)> = zones
++            .into_iter()
++            .map(|(zone, colors)| (zone, self.scale_direct(dev_idx, &colors)))
++            .collect();
++
++        let mut buf = self.direct_buffer.lock();
++        for (zone, colors) in scaled {
++            buf.set(device_id.clone(), zone, colors);
++        }
++    }
++
++    /// Store unscaled Direct colors and push the scaled version to the writer thread.
++    fn store_and_push_direct(
++        &mut self,
++        dev_idx: u32,
++        device_id: String,
++        zone_colors: HashMap<u8, Vec<[u8; 3]>>,
++    ) {
++        let scaled: Vec<(u8, Vec<[u8; 3]>)> = zone_colors
++            .iter()
++            .map(|(zone, colors)| (*zone, self.scale_direct(dev_idx, colors)))
++            .collect();
++
++        self.last_direct_colors
++            .entry(dev_idx)
++            .or_default()
++            .extend(zone_colors);
++
++        let mut buf = self.direct_buffer.lock();
++        for (zone, colors) in scaled {
++            buf.set(device_id.clone(), zone, colors);
+         }
+     }
+ 
+@@ -225,7 +302,21 @@
+ 
+     fn read_packet(&mut self) -> anyhow::Result<(u32, u32, Vec<u8>)> {
+         let mut header = [0u8; HEADER_SIZE];
+-        self.stream.read_exact(&mut header)?;
++        // Wait for an idle client's first byte without treating inactivity as
++        // a disconnect. Once a frame starts, read it in full; never discard a
++        // partial header and interpret its remainder as a new frame.
++        loop {
++            if self.stop_flag.load(Ordering::Relaxed) { anyhow::bail!("server stopping"); }
++            match self.stream.read(&mut header[..1]) {
++                Ok(0) => anyhow::bail!("client closed"),
++                Ok(_) => break,
++                Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted) => continue,
++                Err(e) => return Err(e.into()),
++            }
++        }
++        self.stream.set_read_timeout(Some(Duration::from_secs(10)))?;
++        let result = self.stream.read_exact(&mut header[1..]);
++        result?;
+ 
+         if &header[0..4] != MAGIC {
+             anyhow::bail!("Invalid magic bytes");
+@@ -240,6 +331,7 @@
+             self.stream.read_exact(&mut payload)?;
+         }
+ 
++        self.stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+         Ok((dev_idx, pkt_id, payload))
+     }
+ 
+@@ -353,24 +445,31 @@
+         let colors = parse_colors(&payload[6..], num_colors);
+ 
+         // Use cached caps — no RgbController lock needed in the hot path
+-        if let Some(cap) = self.caps().get(dev_idx as usize) {
+-            let device_id = cap.device_id.clone();
+-            let zones: Vec<_> = cap.zones.iter().map(|z| z.led_count as usize).collect();
+-            // Buffer colors per zone — writer thread will flush asap
+-            let mut buf = self.direct_buffer.lock();
+-            let mut offset = 0;
+-            for (zone_idx, count) in zones.iter().enumerate() {
+-                let end = (offset + count).min(colors.len());
+-                if offset < colors.len() {
+-                    buf.set(
+-                        device_id.clone(),
+-                        zone_idx as u8,
+-                        colors[offset..end].to_vec(),
+-                    );
+-                }
+-                offset = end;
+-            }
+-        }
++        let Some((device_id, zones)) = self.caps().get(dev_idx as usize).map(|cap| {
++            (
++                cap.device_id.clone(),
++                cap.zones
++                    .iter()
++                    .map(|z| z.led_count as usize)
++                    .collect::<Vec<_>>(),
++            )
++        }) else {
++            return Ok(());
++        };
++
++        // Split the flat color array into per-zone buffers
++        let mut zone_colors = HashMap::new();
++        let mut offset = 0;
++        for (zone_idx, count) in zones.iter().enumerate() {
++            let end = (offset + count).min(colors.len());
++            if offset < colors.len() {
++                zone_colors.insert(zone_idx as u8, colors[offset..end].to_vec());
++            }
++            offset = end;
++        }
++
++        // Writer thread will flush asap
++        self.store_and_push_direct(dev_idx, device_id, zone_colors);
+ 
+         Ok(())
+     }
+@@ -385,10 +484,15 @@
+         let num_colors = u16::from_le_bytes(payload[8..10].try_into()?) as usize;
+         let colors = parse_colors(&payload[10..], num_colors);
+ 
+-        if let Some(cap) = self.caps().get(dev_idx as usize) {
+-            let device_id = cap.device_id.clone();
+-            self.direct_buffer.lock().set(device_id, zone_idx, colors);
+-        }
++        let Some(device_id) = self
++            .caps()
++            .get(dev_idx as usize)
++            .map(|cap| cap.device_id.clone())
++        else {
++            return Ok(());
++        };
++
++        self.store_and_push_direct(dev_idx, device_id, HashMap::from([(zone_idx, colors)]));
+ 
+         Ok(())
+     }
+@@ -404,20 +508,26 @@
+         let g = payload[5];
+         let b = payload[6];
+ 
+-        if let Some(cap) = self.caps().get(dev_idx as usize) {
+-            let device_id = cap.device_id.clone();
+-            let zones: Vec<_> = cap.zones.iter().map(|z| z.led_count as usize).collect();
+-            let mut offset = 0;
+-            for (zone_idx, count) in zones.iter().enumerate() {
+-                if led_idx < offset + count {
+-                    let colors = vec![[r, g, b]];
+-                    self.direct_buffer
+-                        .lock()
+-                        .set(device_id, zone_idx as u8, colors);
+-                    break;
+-                }
+-                offset += count;
+-            }
++        let Some((device_id, zones)) = self.caps().get(dev_idx as usize).map(|cap| {
++            (
++                cap.device_id.clone(),
++                cap.zones
++                    .iter()
++                    .map(|z| z.led_count as usize)
++                    .collect::<Vec<_>>(),
++            )
++        }) else {
++            return Ok(());
++        };
++
++        let mut offset = 0;
++        for (zone_idx, count) in zones.iter().enumerate() {
++            if led_idx < offset + count {
++                let zone_colors = HashMap::from([(zone_idx as u8, vec![[r, g, b]])]);
++                self.store_and_push_direct(dev_idx, device_id, zone_colors);
++                break;
++            }
++            offset += count;
+         }
+ 
+         Ok(())
+@@ -436,8 +546,14 @@
+         if let Some(effect) = self.parse_mode_data(mode_data) {
+             // Direct mode is controlled exclusively via UpdateLEDs/UpdateZoneLEDs.
+             // Applying it here would overwrite per-LED colors with defaults (all black).
++            // The brightness slider is the one exception: Direct colors arrive
++            // pre-mixed, so we keep the value and scale subsequent frames ourselves.
+             if effect.mode == RgbMode::Direct {
+-                debug!("OpenRGB UpdateMode: mode=Direct (ignored — use UpdateLEDs)");
++                let bri = effect.brightness.min(4);
++                if self.direct_brightness.insert(dev_idx, bri) != Some(bri) {
++                    debug!("OpenRGB UpdateMode: mode=Direct brightness={bri}");
++                    self.reapply_direct(dev_idx);
++                }
+                 return Ok(());
+             }
+ 
+@@ -631,14 +747,14 @@
+         modes.push(self.build_mode_entry(
+             "Direct",
+             0,
+-            MODE_FLAG_HAS_PER_LED_COLOR,
++            MODE_FLAG_HAS_PER_LED_COLOR | MODE_FLAG_HAS_BRIGHTNESS,
+             COLOR_MODE_PER_LED,
+             0,
+             0,
+             0,
+             4,
+             0,
+-            0,
++            4, // full brightness by default — a 0 here would show the slider at zero
+         ));
+ 
+         // Add each supported mode from the device
+@@ -838,3 +954,37 @@
+ 
+     RgbMode::Static
+ }
++
++#[cfg(test)]
++mod connection_tests {
++    use super::*;
++
++    #[test]
++    fn idle_connection_survives_timeout_and_fragmented_header() {
++        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
++        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
++        let (stream, _) = listener.accept().unwrap();
++        stream.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
++        let stop = Arc::new(AtomicBool::new(false));
++        let reader = thread::spawn(move || {
++            let mut handler = ClientHandler::new(
++                stream, Arc::new(Mutex::new(RgbController::new(HashMap::new(), None))),
++                Arc::new(Mutex::new(DirectColorBuffer::new())), stop,
++            );
++            handler.read_packet().unwrap()
++        });
++        thread::sleep(Duration::from_millis(80));
++        let mut header = Vec::from(&b"ORGB"[..]);
++        header.extend(0u32.to_le_bytes());
++        header.extend(PKT_REQUEST_PROTOCOL_VERSION.to_le_bytes());
++        header.extend(4u32.to_le_bytes());
++        peer.write_all(&header[..3]).unwrap();
++        thread::sleep(Duration::from_millis(40));
++        peer.write_all(&header[3..]).unwrap();
++        peer.write_all(&4u32.to_le_bytes()).unwrap();
++        let (device, packet, payload) = reader.join().unwrap();
++        assert_eq!(device, 0);
++        assert_eq!(packet, PKT_REQUEST_PROTOCOL_VERSION);
++        assert_eq!(payload, 4u32.to_le_bytes());
++    }
++}
+diff --git a/crates/lianli-daemon/src/rgb_controller/mod.rs b/crates/lianli-daemon/src/rgb_controller/mod.rs
+--- a/crates/lianli-daemon/src/rgb_controller/mod.rs
++++ b/crates/lianli-daemon/src/rgb_controller/mod.rs
+@@ -192,6 +192,7 @@
+             let idx = effect_index_from_state(&state.led_state);
+ 
+             wireless.send_rgb_direct(&state.mac, &state.led_state, &idx, 4)?;
++            state.led_state_sent = true;
+             debug!(
+                 "Set wireless RGB on {device_id} zone {zone}: {:?}, {} LEDs/zone",
+                 effect.mode, leds_in_zone
+@@ -243,10 +244,48 @@
+ 
+             let idx = effect_index_from_state(&state.led_state);
+             wireless.send_rgb_direct(&state.mac, &state.led_state, &idx, 2)?;
++            state.led_state_sent = true;
+             return Ok(());
+         }
+ 
+         anyhow::bail!("RGB device not found: {device_id}");
++    }
++
++    /// Re-send the last LED frame we pushed to each wireless device.
++    ///
++    /// The fan PWM keepalive (once per second) makes the TL firmware drop its
++    /// lighting state. The native config path can't repair that while OpenRGB
++    /// owns the LEDs — `apply_config` returns early — and OpenRGB only pushes
++    /// Direct frames when colors change, so nothing restores them. Replaying
++    /// the cached frame also refreshes `desired_effects`, clearing the drift.
++    ///
++    /// Returns true when OpenRGB owns the LEDs, i.e. the caller should not fall
++    /// back to re-applying the native config.
++    pub fn resend_last_wireless_frame(&self) -> bool {
++        let openrgb_owns = self.openrgb_active
++            || self
++                .config
++                .as_ref()
++                .map(|c| c.openrgb_server)
++                .unwrap_or(false);
++        if !openrgb_owns {
++            return false;
++        }
++
++        let Some(ref wireless) = self.wireless else {
++            return true;
++        };
++
++        for (device_id, state) in &self.wireless_state {
++            if !state.led_state_sent {
++                continue;
++            }
++            let idx = effect_index_from_state(&state.led_state);
++            if let Err(e) = wireless.send_rgb_direct(&state.mac, &state.led_state, &idx, 2) {
++                debug!("Drift re-send failed for {device_id}: {e}");
++            }
++        }
++        true
+     }
+ 
+     /// Upload a multi-frame animation to a wireless device via
+@@ -283,6 +322,7 @@
+             let idx = effect_index_from_frames(frames);
+             wireless.send_rgb_frames(&state.mac, frames, interval_ms, &idx, 4)?;
+             state.led_state.copy_from_slice(&frames[frames.len() - 1]);
++            state.led_state_sent = true;
+             return Ok(());
+         }
+         anyhow::bail!("wireless RGB device not found: {device_id}");
+diff --git a/crates/lianli-daemon/src/rgb_controller/wireless.rs b/crates/lianli-daemon/src/rgb_controller/wireless.rs
+--- a/crates/lianli-daemon/src/rgb_controller/wireless.rs
++++ b/crates/lianli-daemon/src/rgb_controller/wireless.rs
+@@ -11,6 +11,9 @@
+     pub(super) led_state: Vec<[u8; 3]>,
+     /// Monotonically increasing effect index (4 bytes, sent in RF header).
+     pub(super) effect_counter: u32,
++    /// Whether `led_state` holds colors we actually sent. Starts false so a
++    /// drift re-send can't push the all-black initial buffer to the device.
++    pub(super) led_state_sent: bool,
+ }
+ 
+ impl WirelessRgbState {
+@@ -29,6 +32,7 @@
+             fan_type,
+             led_state: vec![[0, 0, 0]; total_leds],
+             effect_counter: 0,
++            led_state_sent: false,
+         }
+     }
+ }
+diff --git a/crates/lianli-daemon/src/service/display_mode.rs b/crates/lianli-daemon/src/service/display_mode.rs
+--- a/crates/lianli-daemon/src/service/display_mode.rs
++++ b/crates/lianli-daemon/src/service/display_mode.rs
+@@ -7,6 +7,9 @@
+ 
+ impl ServiceManager {
+     pub(super) fn handle_display_switch_to_desktop(&mut self, device_id: &str) {
++        if self.rgb_only {
++            return;
++        }
+         // Find and remove the active LCD target for this device
+         let target_idx = self.targets.iter().find_map(|(&idx, t)| {
+             if t.device_identity == *device_id {
+@@ -67,6 +70,9 @@
+     }
+ 
+     pub(super) fn handle_display_switch_to_lcd(&mut self, device_id: &str, pid: u16) {
++        if self.rgb_only {
++            return;
++        }
+         self.desktop_displays.stop_for_pid(pid);
+         self.mark_mode_switch(device_id);
+         thread::sleep(Duration::from_millis(300));
+diff --git a/crates/lianli-daemon/src/service/init.rs b/crates/lianli-daemon/src/service/init.rs
+--- a/crates/lianli-daemon/src/service/init.rs
++++ b/crates/lianli-daemon/src/service/init.rs
+@@ -20,6 +20,9 @@
+ 
+ impl ServiceManager {
+     pub(super) fn start_fan_control(&mut self) {
++        if self.rgb_only && !self.radiator_fans {
++            return;
++        }
+         if let Some(controller) = self.fan_controller.take() {
+             info!("Stopping existing fan controller for reload...");
+             controller.stop();
+@@ -27,7 +30,13 @@
+         let Some(cfg) = &self.config else {
+             return;
+         };
+-        let fan_config = cfg.fans.clone().unwrap_or_default();
++        let mut fan_config = cfg.fans.clone().unwrap_or_default();
++        if self.rgb_only {
++            // Opt-in applies only to explicitly addressed wireless fan groups.
++            // Wireless AIO pumps are skipped by FanController itself.
++            fan_config.speeds.retain(|group| group.device_id.as_deref()
++                .is_some_and(|id| id.starts_with("wireless:")));
++        }
+         let fan_curves = cfg.fan_curves.clone();
+ 
+         // Reuse the already-opened wired fan device handles (populated at startup).
+@@ -59,6 +68,9 @@
+     }
+ 
+     pub(super) fn start_aio_control(&mut self) {
++        if self.rgb_only {
++            return;
++        }
+         if let Some(existing) = self.aio_controller.take() {
+             existing.stop();
+         }
+@@ -74,6 +86,9 @@
+     /// For each discovered AIO, ensure an AioConfig exists in the user's config.
+     /// Migrates any legacy FanGroup targeting that device, then inserts defaults.
+     pub(super) fn ensure_aio_defaults(&mut self) {
++        if self.rgb_only {
++            return;
++        }
+         let Some(cfg) = self.config.as_mut() else {
+             return;
+         };
+@@ -168,6 +183,11 @@
+     /// Initialize all wired HID devices (fan + RGB) in a single pass.
+     /// Shares one USB handle per physical device across fan and RGB controllers.
+     pub(super) fn init_wired_devices(&mut self) {
++        if self.rgb_only {
++            // Wired constructors can rewrite fan topology or initialize LCDs.
++            self.init_rgb_controller_from(HashMap::new());
++            return;
++        }
+         let mut fan_devices: HashMap<String, Box<dyn FanDevice>> = HashMap::new();
+         let mut wired_rgb: HashMap<String, Box<dyn lianli_devices::traits::RgbDevice>> =
+             HashMap::new();
+@@ -187,7 +207,9 @@
+                 if !lianli_shared::device_id::uses_hid(det.family) {
+                     continue;
+                 }
+-                if det.family == lianli_shared::device_id::DeviceFamily::TlLcd {
++                if det.family == lianli_shared::device_id::DeviceFamily::TlLcd
++                    || (self.rgb_only && det.family.has_lcd())
++                {
+                     continue;
+                 }
+                 let base_id = Self::rusb_device_id(&det);
+@@ -223,7 +245,9 @@
+                 }
+             };
+             for det in enumerate_hid_devices(&api) {
+-                if det.family == lianli_shared::device_id::DeviceFamily::TlLcd {
++                if det.family == lianli_shared::device_id::DeviceFamily::TlLcd
++                    || (self.rgb_only && det.family.has_lcd())
++                {
+                     continue;
+                 }
+                 let base_id = det.device_id();
+@@ -321,7 +345,7 @@
+                     let max_quantity =
+                         supports_quantity.then(|| fan_ctrl.max_fan_quantity_per_port());
+ 
+-                    if supports_quantity {
++                    if supports_quantity && !self.rgb_only {
+                         if let (Some(serial_str), Some(cfg)) = (serial, self.config.as_ref()) {
+                             if let Some(dev_cfg) = cfg.ene6k77.get(serial_str) {
+                                 for (&port, &qty) in &dev_cfg.fan_quantities {
+@@ -394,6 +418,9 @@
+     }
+ 
+     pub(super) fn handle_set_ene6k77_fan_quantity(&mut self, device_id: &str, quantity: u8) {
++        if self.rgb_only {
++            return;
++        }
+         let (base_id, port) = match device_id.rsplit_once(":port") {
+             Some((base, port_str)) => match port_str.parse::<u8>() {
+                 Ok(p) => (base.to_string(), p),
+@@ -549,6 +576,7 @@
+                 Arc::clone(rgb),
+                 Arc::clone(&self.direct_color_buffer),
+                 port,
++                self.rgb_only,
+                 Arc::clone(&self.openrgb_stop),
+                 Arc::clone(&self.openrgb_state),
+             ));
+@@ -571,7 +599,9 @@
+         match self.wireless.connect() {
+             Ok(()) => match self.wireless.start_polling() {
+                 Ok(()) => {
+-                    let _ = self.wireless.send_rx_sequence();
++                    if !self.rgb_only {
++                        let _ = self.wireless.send_rx_sequence();
++                    }
+                     info!("Wireless links active");
+                 }
+                 Err(err) => warn!("[wireless] polling start failed: {err}"),
+@@ -583,10 +613,11 @@
+     }
+ 
+     pub(super) fn recover_wireless(&mut self) -> bool {
+-        if self.wireless.soft_reset() {
++        // Soft reset enters LCD video mode; RGB-only recovery reconnects instead.
++        if !self.rgb_only && self.wireless.soft_reset() {
+             return true;
+         }
+-        warn!("Wireless soft-reset failed; reinitialising");
++        warn!("Reinitialising wireless link");
+         self.wireless.stop();
+         self.try_wireless();
+         self.wireless.has_discovered_devices()
+diff --git a/crates/lianli-daemon/src/service/media.rs b/crates/lianli-daemon/src/service/media.rs
+--- a/crates/lianli-daemon/src/service/media.rs
++++ b/crates/lianli-daemon/src/service/media.rs
+@@ -40,6 +40,9 @@
+ 
+ impl ServiceManager {
+     pub(super) fn prepare_media_assets(&mut self, tx: Sender<DaemonEvent>) {
++        if self.rgb_only {
++            return;
++        }
+         let screen_map: HashMap<String, ScreenInfo> = enumerate_devices()
+             .unwrap_or_default()
+             .into_iter()
+@@ -110,6 +113,9 @@
+     }
+ 
+     pub(super) fn refresh_targets(&mut self) {
++        if self.rgb_only {
++            return;
++        }
+         if self.media_assets.is_empty() {
+             return;
+         }
+diff --git a/crates/lianli-daemon/src/service/mod.rs b/crates/lianli-daemon/src/service/mod.rs
+--- a/crates/lianli-daemon/src/service/mod.rs
++++ b/crates/lianli-daemon/src/service/mod.rs
+@@ -21,7 +21,7 @@
+ use std::sync::Arc;
+ use std::thread::{self, JoinHandle};
+ use std::time::{Duration, Instant};
+-use tracing::{info, warn};
++use tracing::{debug, info, warn};
+ 
+ use runtime::LcdBackend;
+ 
+@@ -74,6 +74,8 @@
+ 
+ pub struct ServiceManager {
+     config_path: PathBuf,
++    rgb_only: bool,
++    radiator_fans: bool,
+     config: Option<AppConfig>,
+     media_assets: HashMap<usize, Arc<lianli_media::MediaAsset>>,
+     targets: HashMap<usize, ActiveTarget>,
+@@ -119,11 +121,13 @@
+ }
+ 
+ impl ServiceManager {
+-    pub fn new(config_path: PathBuf) -> Result<Self> {
++    pub fn new(config_path: PathBuf, rgb_only: bool, radiator_fans: bool) -> Result<Self> {
+         let ipc_state = Arc::new(Mutex::new(DaemonState::new(config_path.clone())));
+ 
+         Ok(Self {
+             config_path,
++            rgb_only,
++            radiator_fans,
+             config: None,
+             media_assets: HashMap::new(),
+             targets: HashMap::new(),
+@@ -207,6 +211,9 @@
+     /// Process deferred firmware reads for AIO LCD devices.
+     /// Called every DevicePoll tick.
+     fn process_pending_lcd_firmware(&mut self) {
++        if self.rgb_only {
++            return;
++        }
+         let now = Instant::now();
+         let ready: Vec<(String, bool)> = self
+             .aio_lcd_pending_firmware
+@@ -345,7 +352,7 @@
+         if self.wireless.has_discovered_devices() {
+             std::thread::sleep(std::time::Duration::from_millis(500));
+         }
+-        if !self.use_rusb() {
++        if !self.rgb_only && !self.use_rusb() {
+             ensure_hid_devices_bound();
+         }
+         self.init_wired_devices();
+@@ -478,8 +485,20 @@
+                     self.stream_target(asset);
+                 }
+                 DaemonEvent::ResyncWirelessRgb => {
+-                    info!("Wireless RGB drift detected, re-applying config");
+-                    self.apply_rgb_config();
++                    // While OpenRGB owns the LEDs the native config path is
++                    // suppressed, so replay the last frame instead. Logged at
++                    // debug: the fan PWM keepalive triggers this every second.
++                    let replayed = self
++                        .rgb_controller
++                        .as_ref()
++                        .map(|rgb| rgb.lock().resend_last_wireless_frame())
++                        .unwrap_or(false);
++                    if replayed {
++                        debug!("Wireless RGB drift detected, re-sent last frame");
++                    } else {
++                        info!("Wireless RGB drift detected, re-applying config");
++                        self.apply_rgb_config();
++                    }
+                 }
+                 DaemonEvent::RecreateMedia { target_index } => {
+                     if let Some(asset) = self.media_assets.get(&target_index).cloned() {
+@@ -499,3 +518,55 @@
+         Ok(self.restart_requested)
+     }
+ }
++
++#[cfg(test)]
++mod rgb_only_tests {
++    use super::*;
++
++    #[test]
++    fn rgb_only_skips_cooling_controllers_with_populated_config() {
++        let mut manager = ServiceManager::new(PathBuf::from("/nonexistent/config.json"), true, false).unwrap();
++        let mut config = AppConfig::default();
++        config.aio.insert("wireless:01:02:03:04:05:06".into(), lianli_shared::aio::AioConfig::default());
++        config.fans = Some(lianli_shared::fan::FanConfig::default());
++        manager.config = Some(config);
++        let before = serde_json::to_value(&manager.config).unwrap();
++        manager.start_fan_control();
++        manager.start_aio_control();
++        manager.ensure_aio_defaults();
++        assert!(manager.fan_controller.is_none());
++        assert!(manager.aio_controller.is_none());
++        assert_eq!(serde_json::to_value(&manager.config).unwrap(), before);
++    }
++
++    #[test]
++    fn radiator_opt_in_keeps_pump_and_lcd_disabled() {
++        let mut manager = ServiceManager::new(PathBuf::from("/nonexistent/config.json"), true, true).unwrap();
++        manager.config = Some(AppConfig::default());
++        manager.start_fan_control();
++        manager.start_aio_control();
++        manager.ensure_aio_defaults();
++        assert!(manager.fan_controller.is_some());
++        assert!(manager.aio_controller.is_none());
++        assert!(manager.config.as_ref().unwrap().aio.is_empty());
++        manager.fan_controller.take().unwrap().stop();
++    }
++
++    #[test]
++    fn rgb_only_ignores_configured_lcd_and_display_commands() {
++        let mut manager = ServiceManager::new(PathBuf::from("/nonexistent/config.json"), true, false).unwrap();
++        manager.config = Some(serde_json::from_value(serde_json::json!({
++            "lcds": [{"index": 0, "type": "color", "rgb": [255, 0, 0]}]
++        })).unwrap());
++        let (tx, rx) = std::sync::mpsc::channel();
++        manager.prepare_media_assets(tx);
++        manager.refresh_targets();
++        manager.process_pending_lcd_firmware();
++        manager.handle_display_switch_to_desktop("usb:test");
++        manager.handle_display_switch_to_lcd("usb:test", 0x1234);
++        assert!(manager.media_assets.is_empty());
++        assert!(manager.targets.is_empty());
++        assert!(manager.aio_lcd_pending_firmware.is_empty());
++        assert!(rx.try_recv().is_err());
++    }
++}
+diff --git a/crates/lianli-daemon/src/service/streaming.rs b/crates/lianli-daemon/src/service/streaming.rs
+--- a/crates/lianli-daemon/src/service/streaming.rs
++++ b/crates/lianli-daemon/src/service/streaming.rs
+@@ -6,6 +6,9 @@
+ 
+ impl ServiceManager {
+     pub(super) fn stream_target(&mut self, this_asset: Arc<MediaAsset>) {
++        if self.rgb_only {
++            return;
++        }
+         // Find ID of matching target
+         let target_id = self
+             .targets
+diff --git a/crates/lianli-daemon/src/service/sync.rs b/crates/lianli-daemon/src/service/sync.rs
+--- a/crates/lianli-daemon/src/service/sync.rs
++++ b/crates/lianli-daemon/src/service/sync.rs
+@@ -17,7 +17,9 @@
+     pub(super) fn refresh_usb_device_cache(&mut self) {
+         match enumerate_devices() {
+             Ok(usb_devices) => {
+-                self.refresh_tl_lcd_port_index_cache(&usb_devices);
++                if !self.rgb_only {
++                    self.refresh_tl_lcd_port_index_cache(&usb_devices);
++                }
+                 self.build_usb_device_cache(usb_devices);
+             }
+             Err(e) => {
+@@ -151,6 +153,9 @@
+ 
+         self.cached_usb_devices = cached;
+ 
++        if self.rgb_only {
++            return;
++        }
+         match crate::desktop_display::enumerate_turzx() {
+             Ok(present) => self.desktop_displays.sync(&present),
+             Err(e) => warn!("TURZX enumeration failed: {e:#}"),
+diff --git a/crates/lianli-devices/src/wireless/controller.rs b/crates/lianli-devices/src/wireless/controller.rs
+--- a/crates/lianli-devices/src/wireless/controller.rs
++++ b/crates/lianli-devices/src/wireless/controller.rs
+@@ -28,6 +28,7 @@
+     /// 0xFFFF means unavailable/not yet read.
+     pub(super) mobo_pwm: Arc<AtomicU16>,
+     pub(super) tx_failures: Arc<AtomicU32>,
++    pub(super) rgb_packets: Arc<Mutex<std::collections::HashMap<[u8; 6], Vec<(Vec<u8>, u64)>>>>,
+     pub(super) desired_effects: Arc<Mutex<std::collections::HashMap<[u8; 6], [u8; 4]>>>,
+ }
+ 
+@@ -44,6 +45,7 @@
+             discovered_devices: Arc::clone(&self.discovered_devices),
+             mobo_pwm: Arc::clone(&self.mobo_pwm),
+             tx_failures: Arc::clone(&self.tx_failures),
++            rgb_packets: Arc::clone(&self.rgb_packets),
+             desired_effects: Arc::clone(&self.desired_effects),
+         }
+     }
+@@ -62,6 +64,7 @@
+             discovered_devices: Arc::new(Mutex::new(Vec::new())),
+             mobo_pwm: Arc::new(AtomicU16::new(0xFFFF)),
+             tx_failures: Arc::new(AtomicU32::new(0)),
++            rgb_packets: Arc::new(Mutex::new(std::collections::HashMap::new())),
+             desired_effects: Arc::new(Mutex::new(std::collections::HashMap::new())),
+         }
+     }
+@@ -403,7 +406,11 @@
+         }
+         let devices = self.discovered_devices.lock();
+         devices.iter().any(|d| match desired.get(&d.mac) {
+-            Some(want) => d.effect_index != *want,
++            Some(want) => {
++                let drifted = d.effect_index != *want;
++                if drifted { debug!("RGB drift on {}: observed={:?} desired={:?}", d.mac_str(), d.effect_index, want); }
++                drifted
++            },
+             None => false,
+         })
+     }
+diff --git a/crates/lianli-devices/src/wireless/fan_speed.rs b/crates/lianli-devices/src/wireless/fan_speed.rs
+--- a/crates/lianli-devices/src/wireless/fan_speed.rs
++++ b/crates/lianli-devices/src/wireless/fan_speed.rs
+@@ -1,23 +1,22 @@
+ use super::controller::WirelessController;
+ use super::discovery::DiscoveredDevice;
+ use super::fan_type::WirelessFanType;
+-use super::{RF_CHUNKS, RF_CHUNK_SIZE, RF_DATA_SIZE, RF_PWM_CMD, RF_SELECT, USB_CMD_SEND_RF};
++use super::{RF_DATA_SIZE, RF_PWM_CMD, RF_SELECT};
+ use anyhow::{Context, Result};
+-use lianli_transport::usb::USB_TIMEOUT;
+ use parking_lot::Mutex;
+ use std::collections::HashMap;
+ use std::sync::OnceLock;
+ use std::thread;
+ use std::time::{Duration, Instant};
+-use tracing::debug;
++use tracing::info;
+ 
+ // Wireless fans can revert to hardware-default speed if PWM traffic goes quiet.
+ // Keep sending steady-state targets periodically even when the reported PWM
+ // already matches the requested value.
+ const PWM_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
+ 
+-fn pwm_last_sent() -> &'static Mutex<HashMap<[u8; 6], Instant>> {
+-    static LAST_SENT: OnceLock<Mutex<HashMap<[u8; 6], Instant>>> = OnceLock::new();
++fn pwm_last_sent() -> &'static Mutex<HashMap<[u8; 6], (Instant, [u8; 4])>> {
++    static LAST_SENT: OnceLock<Mutex<HashMap<[u8; 6], (Instant, [u8; 4])>>> = OnceLock::new();
+     LAST_SENT.get_or_init(|| Mutex::new(HashMap::new()))
+ }
+ 
+@@ -51,6 +50,9 @@
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+             ))?;
+ 
++        anyhow::ensure!(device.master_mac == master_mac && device.rx_type != 0,
++            "Refusing PWM write with invalid binding for {} (rx={})", device.mac_str(), device.rx_type);
++
+         let seq_index = devices
+             .iter()
+             .filter(|d| d.master_mac == master_mac && d.device_type != 0xFF)
+@@ -70,11 +72,17 @@
+                 target.abs_diff(*reported) > 5 || (*target <= 10 && *reported != *target)
+             });
+         let now = Instant::now();
+-        let force_keepalive = pwm_last_sent()
++        // TL wireless uses the master-clock heartbeat for liveness. Repeating
++        // its binding/PWM command also resets lighting; only send changes.
++        let force_keepalive = !matches!(device.fan_type, WirelessFanType::Tlv2Led | WirelessFanType::Tlv2Lcd)
++            && pwm_last_sent()
+             .lock()
+             .get(mac)
+-            .map_or(true, |t| now.duration_since(*t) >= PWM_KEEPALIVE_INTERVAL);
+-        if !needs_send && !force_keepalive {
++            .map_or(true, |(t, _)| now.duration_since(*t) >= PWM_KEEPALIVE_INTERVAL);
++        let duplicate_pending = matches!(device.fan_type, WirelessFanType::Tlv2Led | WirelessFanType::Tlv2Lcd)
++            && pwm_last_sent().lock().get(mac).is_some_and(|(sent, target)|
++                *target == pwm && now.duration_since(*sent) < Duration::from_secs(3));
++        if duplicate_pending || (!needs_send && !force_keepalive) {
+             return Ok(());
+         }
+ 
+@@ -88,34 +96,30 @@
+         rf_data[16] = seq_index;
+         rf_data[17..21].copy_from_slice(&pwm);
+ 
++        // RF 0x10 also refreshes binding state and may reset TL lighting.
++        // Replay its existing RGB payload in the same USB transaction rather
++        // than waiting for the next telemetry poll / daemon event.
++        let cache = self.rgb_packets.lock();
++        let replay = if matches!(device.fan_type, WirelessFanType::Tlv2Led | WirelessFanType::Tlv2Lcd) {
++            cache.get(mac)
++        } else { None };
++        let replay_count = replay.map_or(0, |packets| packets.len());
+         self.tx_recover(|handle| {
+-            for chunk_idx in 0..RF_CHUNKS as u8 {
+-                let mut packet = vec![0u8; 64];
+-                packet[0] = USB_CMD_SEND_RF;
+-                packet[1] = chunk_idx;
+-                packet[2] = device.channel;
+-                packet[3] = device.rx_type;
+-
+-                let start = chunk_idx as usize * RF_CHUNK_SIZE;
+-                let end = start + RF_CHUNK_SIZE;
+-                packet[4..64].copy_from_slice(&rf_data[start..end]);
+-
+-                handle
+-                    .write(&packet, USB_TIMEOUT)
+-                    .context("sending fan speed RF packet")?;
+-                thread::sleep(Duration::from_millis(1));
+-            }
+-            Ok(())
++            send_pwm_and_rgb(&rf_data, replay.map(|p| p.as_slice()), |packet| {
++                self.send_rf_packet(handle, &device, packet)
++            })
+         })?;
+-
+-        pwm_last_sent().lock().insert(*mac, Instant::now());
+-
+-        debug!(
+-            "Set fan PWM for {} (rx={}, ch={}): {:?}",
++        drop(cache);
++
++        pwm_last_sent().lock().insert(*mac, (Instant::now(), pwm));
++
++        info!(
++            "Set fan PWM for {} (rx={}, ch={}): {:?}; preserved RGB with {} cached packet(s)",
+             device.mac_str(),
+             device.rx_type,
+             device.channel,
+-            pwm
++            pwm,
++            replay_count
+         );
+         Ok(())
+     }
+@@ -162,3 +166,42 @@
+         }
+     }
+ }
++
++/// Keep PWM and the cached lighting upload contiguous under the caller's TX lock.
++fn send_pwm_and_rgb(
++    pwm: &[u8],
++    rgb: Option<&[(Vec<u8>, u64)]>,
++    mut send: impl FnMut(&[u8]) -> Result<()>,
++) -> Result<()> {
++    send(pwm)?;
++    if let Some(packets) = rgb {
++        for (packet, gap_ms) in packets {
++            send(packet)?;
++            if *gap_ms > 0 { thread::sleep(Duration::from_millis(*gap_ms)); }
++        }
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod transaction_tests {
++    use super::*;
++
++    #[test]
++    fn lighting_replay_follows_pwm_in_original_packet_order() {
++        let rgb = vec![(vec![0x20, 0], 0), (vec![0x20, 0], 0), (vec![0x20, 1, 42], 0)];
++        let mut sent = Vec::new();
++        send_pwm_and_rgb(&[0x10, 160], Some(&rgb), |packet| { sent.push(packet.to_vec()); Ok(()) }).unwrap();
++        assert_eq!(sent, vec![vec![0x10, 160], vec![0x20, 0], vec![0x20, 0], vec![0x20, 1, 42]]);
++    }
++
++    #[test]
++    fn failed_pwm_does_not_upload_lighting() {
++        let mut count = 0;
++        assert!(send_pwm_and_rgb(&[0x10], Some(&[(vec![0x20], 0)]), |_| {
++            count += 1;
++            anyhow::bail!("transport failure")
++        }).is_err());
++        assert_eq!(count, 1);
++    }
++}
+diff --git a/crates/lianli-devices/src/wireless/rgb.rs b/crates/lianli-devices/src/wireless/rgb.rs
+--- a/crates/lianli-devices/src/wireless/rgb.rs
++++ b/crates/lianli-devices/src/wireless/rgb.rs
+@@ -91,8 +91,13 @@
+         const LZO_RF_VALID_LEN: usize = 220;
+         let total_pk_num = (compressed.len() as f64 / LZO_RF_VALID_LEN as f64).ceil() as u8;
+ 
++        // Serialize cache updates with PWM transactions: a speed command must
++        // replay the latest complete RGB upload, including animation payloads.
++        let mut cache = self.rgb_packets.lock();
++        let mut cached_packets = Vec::new();
+         let mut packets_sent: u8 = 0;
+         self.tx_recover(|handle| {
++            cached_packets.clear();
+             let mut offset: usize = 0;
+             let mut index: u8 = 0;
+             while offset < compressed.len() || index == 0 {
+@@ -123,6 +128,7 @@
+                     let gap_ms = if repeats <= 2 { 2 } else { 20 };
+                     for repeat in 0..repeats {
+                         self.send_rf_packet(handle, &device, &rf_data)?;
++                        cached_packets.push((rf_data.clone(), if repeat < repeats - 1 { gap_ms } else { 0 }));
+                         if repeat < repeats - 1 {
+                             thread::sleep(Duration::from_millis(gap_ms));
+                         }
+@@ -135,6 +141,7 @@
+                     offset += LZO_RF_VALID_LEN;
+ 
+                     self.send_rf_packet(handle, &device, &rf_data)?;
++                    cached_packets.push((rf_data.clone(), 0));
+                 }
+ 
+                 index += 1;
+@@ -143,9 +150,12 @@
+             Ok(())
+         })?;
+ 
++        cache.insert(device.mac, cached_packets);
++
+         self.desired_effects
+             .lock()
+             .insert(device.mac, *effect_index);
++        drop(cache);
+ 
+         debug!(
+             "Sent RGB to {} ({} frame(s), {} LEDs, {} compressed, {} packets, {}ms interval)",
+diff --git a/crates/lianli-daemon/src/ipc_server.rs b/crates/lianli-daemon/src/ipc_server.rs
+--- a/crates/lianli-daemon/src/ipc_server.rs
++++ b/crates/lianli-daemon/src/ipc_server.rs
+@@ -98,11 +98,11 @@
+ 
+     let listener = UnixListener::bind(socket_path)?;
+ 
+-    // Make socket world-accessible so non-root GUI can connect
++    // User-local Zorya clients share the daemon UID; keep IPC private.
+     #[cfg(unix)]
+     {
+         use std::os::unix::fs::PermissionsExt;
+-        fs::set_permissions(socket_path, fs::Permissions::from_mode(0o666))?;
++        fs::set_permissions(socket_path, fs::Permissions::from_mode(0o600))?;
+     }
+ 
+     // Non-blocking so we can check stop_flag

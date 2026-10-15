@@ -1,0 +1,7 @@
+# Zorya L-Wireless SDK bridge. Active-user ACL only; no world-writable devices.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0416", ATTR{idProduct}=="8040", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0416", ATTR{idProduct}=="8041", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="e304", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="e305", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1cbe", ATTR{idProduct}=="a021", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1cbe", ATTR{idProduct}=="a034", TAG+="uaccess"

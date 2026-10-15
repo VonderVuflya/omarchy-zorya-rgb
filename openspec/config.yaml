@@ -1,0 +1,11 @@
+schema: spec-driven
+context: |
+  Project: ZoryaRGB, open source Omarchy Quattro plugin.
+  Artifacts: Russian prose with OpenSpec English structural headings and SHALL/MUST.
+  UI: English, native Quickshell/QtQuick, no second shell process.
+  Backend: Python 3.11+, local Unix socket, OpenRGB SDK on loopback, systemd user services.
+  Supported integration: OpenRGB, Lian Li wireless HydroShift II and UNI FAN TL; Kingston DDR5 detection compatibility.
+  Never modify /usr/share/omarchy or system OpenRGB binaries. Never write SPD EEPROM.
+  Explicit setup action is required for package installation and hardware binding.
+  Cooling/LCD settings remain untouched unless the user explicitly enables a cooling policy.
+  Preserve working user configuration during migration and provide uninstall/rollback.

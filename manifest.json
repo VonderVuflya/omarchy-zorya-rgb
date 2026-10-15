@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "vondervuflya.zorya-rgb",
+  "name": "ZoryaRGB",
+  "version": "0.1.0",
+  "author": "Sergey Cherkashin",
+  "license": "GPL-3.0-or-later",
+  "description": "Color, effects and saved lighting scenes for OpenRGB and supported Lian Li devices",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "BarWidget.qml"},
+  "barWidget": {
+    "displayName": "ZoryaRGB",
+    "description": "Choose colors, effects, devices and hardware setup",
+    "category": "System",
+    "allowMultiple": false
+  }
+}
