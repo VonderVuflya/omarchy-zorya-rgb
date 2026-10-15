@@ -62,6 +62,86 @@ Ui.Panel {
     }
     function setup(component) { root.backend.command(["setup", "--component", component], "setup") }
 
+    component RoundedButton: Button {
+        id: buttonControl
+        hoverEnabled: true
+        background: Rectangle {
+            implicitWidth: 80; implicitHeight: 28
+            radius: 8
+            color: root.controlFill(buttonControl.down ? 0.22 : buttonControl.hovered ? 0.14 : 0.08)
+            border.width: 1
+            border.color: buttonControl.visualFocus ? Commons.Color.accent : root.controlFill(buttonControl.hovered ? 0.28 : 0.16)
+            opacity: buttonControl.enabled ? 1 : 0.6
+            Behavior on color { ColorAnimation { duration: 90 } }
+        }
+    }
+
+    component RoundedTabButton: TabButton {
+        id: tabControl
+        hoverEnabled: true
+        background: Rectangle {
+            implicitHeight: 25
+            radius: 8
+            color: root.controlFill(tabControl.down ? 0.24 : tabControl.checked ? 0.18 : tabControl.hovered ? 0.1 : 0.035)
+            border.width: 1
+            border.color: tabControl.visualFocus ? Commons.Color.accent : root.controlFill(tabControl.checked ? 0.28 : 0.06)
+            Behavior on color { ColorAnimation { duration: 90 } }
+        }
+    }
+
+    component RoundedComboBox: ComboBox {
+        id: comboControl
+        hoverEnabled: true
+        background: Rectangle {
+            implicitWidth: 120; implicitHeight: 28
+            radius: 8
+            color: root.controlFill(comboControl.down ? 0.2 : comboControl.hovered ? 0.12 : 0.07)
+            border.width: 1
+            border.color: comboControl.visualFocus ? Commons.Color.accent : root.controlFill(0.2)
+            opacity: comboControl.enabled ? 1 : 0.6
+            Behavior on color { ColorAnimation { duration: 90 } }
+        }
+    }
+
+    component RoundedTextField: TextField {
+        id: fieldControl
+        background: Rectangle {
+            implicitWidth: 120; implicitHeight: 28
+            radius: 8
+            color: root.controlFill(0.045)
+            border.width: 1
+            border.color: fieldControl.activeFocus ? Commons.Color.accent : root.controlFill(0.16)
+        }
+    }
+
+    component RoundedSpinBox: SpinBox {
+        id: spinControl
+        background: Rectangle {
+            implicitWidth: 70; implicitHeight: 28
+            radius: 8
+            color: root.controlFill(0.045)
+            border.width: 1
+            border.color: spinControl.activeFocus ? Commons.Color.accent : root.controlFill(0.16)
+        }
+        up.indicator: Rectangle {
+            x: spinControl.width - width
+            implicitWidth: 20; implicitHeight: 14
+            width: 20; height: spinControl.height / 2
+            radius: 6
+            color: root.controlFill(spinControl.up.pressed ? 0.22 : spinControl.up.hovered ? 0.15 : 0.08)
+            Text { anchors.centerIn: parent; text: "▴"; color: spinControl.palette.text; font.pixelSize: 11 }
+        }
+        down.indicator: Rectangle {
+            x: spinControl.width - width
+            y: spinControl.height - height
+            implicitWidth: 20; implicitHeight: 14
+            width: 20; height: spinControl.height / 2
+            radius: 6
+            color: root.controlFill(spinControl.down.pressed ? 0.22 : spinControl.down.hovered ? 0.15 : 0.08)
+            Text { anchors.centerIn: parent; text: "▾"; color: spinControl.palette.text; font.pixelSize: 11 }
+        }
+    }
+
     Ui.KeyboardPanel {
         id: card
         anchorItem: root.anchorItem
@@ -124,7 +204,13 @@ Ui.Panel {
                         checked: root.backend.state.on === true
                         onToggled: root.backend.update({on: checked})
                     }
-                    Button { text: "×"; Accessible.name: "Close Zorya"; onClicked: root.close() }
+                    RoundedButton {
+                        Layout.preferredWidth: 32
+                        Layout.maximumWidth: 32
+                        text: "×"
+                        Accessible.name: "Close Zorya"
+                        onClicked: root.close()
+                    }
                 }
                 Rectangle {
                     visible: root.backend.error !== "" || root.inputError !== ""
@@ -142,12 +228,15 @@ Ui.Panel {
                     }
                 }
                 TabBar {
+                    spacing: 4
+                    padding: 3
+                    background: Rectangle { radius: 10; color: root.controlFill(0.035) }
                     Layout.fillWidth: true
                     currentIndex: root.page
                     onCurrentIndexChanged: root.page = currentIndex
-                    TabButton { text: "Color & effects" }
-                    TabButton { text: "Devices" }
-                    TabButton { text: "Setup" }
+                    RoundedTabButton { text: "Color & effects" }
+                    RoundedTabButton { text: "Devices" }
+                    RoundedTabButton { text: "Setup" }
                 }
                 ScrollView {
                     id: scroll
@@ -170,6 +259,7 @@ Ui.Panel {
                                     Layout.preferredHeight: 224
                                     selectedColor: root.selectedColor
                                     onColorPicked: function(value) { root.chooseColor(value) }
+                                    onInteractionFinished: root.backend.commitPending()
                                 }
                                 ColumnLayout {
                                     Layout.fillWidth: true
@@ -180,7 +270,7 @@ Ui.Panel {
                                         radius: 8; color: root.selectedColor
                                         border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.18)
                                     }
-                                    TextField {
+                                    RoundedTextField {
                                         id: hexInput
                                         Layout.fillWidth: true
                                         text: root.selectedColor
@@ -190,7 +280,7 @@ Ui.Panel {
                                         Accessible.name: "Primary HEX color"
                                         onEditingFinished: root.chooseColor(text)
                                     }
-                                    Button {
+                                    RoundedButton {
                                         Layout.fillWidth: true
                                         text: "Pure white"
                                         onClicked: root.chooseColor("#FFFFFF")
@@ -208,7 +298,7 @@ Ui.Panel {
                                         required property int index
                                         Layout.fillWidth: true
                                         Label { text: channelRow.modelData; opacity: 0.65 }
-                                        SpinBox {
+                                        RoundedSpinBox {
                                             Layout.fillWidth: true
                                             from: 0; to: 255; editable: true
                                             value: root.rgb[channelRow.index]
@@ -244,7 +334,7 @@ Ui.Panel {
                             }
                             RowLayout {
                                 Label { text: "Effect"; Layout.preferredWidth: 84 }
-                                ComboBox {
+                                RoundedComboBox {
                                     id: effects
                                     Layout.fillWidth: true
                                     model: ["static", "pulse", "rainbow", "gradient"]
@@ -268,7 +358,7 @@ Ui.Panel {
                                 visible: root.backend.state.effect === "gradient"
                                 Label { text: "Second color"; Layout.preferredWidth: 84 }
                                 Rectangle { implicitWidth: 26; implicitHeight: 26; radius: 6; color: root.backend.state.secondary_color }
-                                TextField {
+                                RoundedTextField {
                                     Layout.fillWidth: true
                                     text: root.backend.state.secondary_color
                                     maximumLength: 7
@@ -283,8 +373,8 @@ Ui.Panel {
                             Label { text: "SAVED SCENES"; font.pixelSize: 11; font.letterSpacing: 2; opacity: 0.65 }
                             RowLayout {
                                 Layout.fillWidth: true
-                                TextField { id: presetName; Layout.fillWidth: true; placeholderText: "Scene name"; maximumLength: 64; Accessible.name: "Scene name" }
-                                Button {
+                                RoundedTextField { id: presetName; Layout.fillWidth: true; placeholderText: "Scene name"; maximumLength: 64; Accessible.name: "Scene name" }
+                                RoundedButton {
                                     text: "Save"
                                     enabled: presetName.text.trim() !== "" && !root.backend.busy
                                     onClicked: root.backend.command(["preset", "save", presetName.text.trim()])
@@ -292,7 +382,7 @@ Ui.Panel {
                             }
                             RowLayout {
                                 Layout.fillWidth: true
-                                ComboBox {
+                                RoundedComboBox {
                                     id: presetPicker
                                     Layout.fillWidth: true
                                     model: root.presets
@@ -302,8 +392,8 @@ Ui.Panel {
                                     Accessible.name: "Saved scenes"
                                     onActivated: presetName.text = root.presets[currentIndex].name
                                 }
-                                Button { text: "Apply"; enabled: root.presets.length > 0 && !root.backend.busy; onClicked: root.presetAction("apply") }
-                                Button { text: "Delete"; enabled: root.presets.length > 0 && !root.backend.busy; onClicked: root.presetAction("delete") }
+                                RoundedButton { text: "Apply"; enabled: root.presets.length > 0 && !root.backend.busy; onClicked: root.presetAction("apply") }
+                                RoundedButton { text: "Delete"; enabled: root.presets.length > 0 && !root.backend.busy; onClicked: root.presetAction("delete") }
                             }
                             Label { text: "Save again with the same name to update a scene."; font.pixelSize: 11; opacity: 0.65; wrapMode: Text.Wrap; Layout.fillWidth: true }
                         }
@@ -314,13 +404,13 @@ Ui.Panel {
                             RowLayout {
                                 Layout.fillWidth: true
                                 Label { text: root.selectedIds.length + " selected"; Layout.fillWidth: true }
-                                Button {
+                                RoundedButton {
                                     text: "All"
                                     enabled: root.backend.devices.length > 0
                                     onClicked: root.backend.update({devices: root.backend.devices.map(function(device) { return device.id })})
                                 }
-                                Button { text: "None"; enabled: root.selectedIds.length > 0; onClicked: root.backend.update({devices: []}) }
-                                Button { text: "Refresh"; enabled: !root.backend.busy; onClicked: root.backend.refresh() }
+                                RoundedButton { text: "None"; enabled: root.selectedIds.length > 0; onClicked: root.backend.update({devices: []}) }
+                                RoundedButton { text: "Refresh"; enabled: !root.backend.busy; onClicked: root.backend.refresh() }
                             }
                             Label { text: "Choose exactly which devices receive this scene. No devices are selected automatically."; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; opacity: 0.65 }
                             Repeater {
@@ -359,7 +449,7 @@ Ui.Panel {
                             spacing: 12
                             Label { text: "HARDWARE & CONNECTION"; font.letterSpacing: 2; font.pixelSize: 11; opacity: 0.65 }
                             Label { text: "Inspect the connection before installing a component. Setup may ask for system authorization and a source build can take several minutes."; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12 }
-                            Button { text: "Run diagnostics"; enabled: !root.backend.busy; onClicked: root.backend.command(["doctor"], "doctor") }
+                            RoundedButton { text: "Run diagnostics"; enabled: !root.backend.busy; onClicked: root.backend.command(["doctor"], "doctor") }
                             Label {
                                 visible: root.unboundWireless.length > 0
                                 text: "UNPAIRED WIRELESS DEVICES"
@@ -377,7 +467,7 @@ Ui.Panel {
                                     required property var modelData
                                     Layout.fillWidth: true
                                     Label { text: wirelessRow.modelData.name; Layout.fillWidth: true; elide: Text.ElideRight }
-                                    Button {
+                                    RoundedButton {
                                         text: "Pair"
                                         enabled: !root.backend.busy
                                         Accessible.name: "Pair " + wirelessRow.modelData.name
@@ -408,12 +498,12 @@ Ui.Panel {
                                             opacity: 0.6; font.pixelSize: 11
                                         }
                                     }
-                                    Button { text: "Set up"; enabled: !root.backend.busy; onClicked: root.setup(componentRow.modelData.id) }
+                                    RoundedButton { text: "Set up"; enabled: !root.backend.busy; onClicked: root.setup(componentRow.modelData.id) }
                                 }
                             }
                             RowLayout {
-                                Button { text: "Set up all components"; enabled: !root.backend.busy; onClicked: root.setup("all") }
-                                Button { text: "Restore lighting"; enabled: !root.backend.busy; onClicked: root.backend.command(["restore"]) }
+                                RoundedButton { text: "Set up all components"; enabled: !root.backend.busy; onClicked: root.setup("all") }
+                                RoundedButton { text: "Restore lighting"; enabled: !root.backend.busy; onClicked: root.backend.command(["restore"]) }
                             }
                             Label { visible: root.backend.operation === "setup" && root.backend.busy; text: "Setup is running. Keep this panel open to see the result."; Layout.fillWidth: true; wrapMode: Text.Wrap }
                             Label { visible: root.backend.diagnostics !== null; text: "DETAILS"; font.pixelSize: 11; opacity: 0.65; font.letterSpacing: 2 }

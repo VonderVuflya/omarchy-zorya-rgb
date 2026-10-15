@@ -8,6 +8,7 @@ Item {
     property string selectedColor: "#FFFFFF"
     readonly property var hsv: Colors.hsv(selectedColor)
     signal colorPicked(string value)
+    signal interactionFinished()
     activeFocusOnTab: true
     Accessible.role: Accessible.Slider
     Accessible.name: "Color wheel. Left and right adjust hue; up and down adjust saturation; Home selects white."
@@ -43,13 +44,15 @@ Item {
     }
     MouseArea {
         anchors.fill: parent
+        preventStealing: true
         cursorShape: Qt.CrossCursor
         function pick(mouse) {
-            wheel.forceActiveFocus()
             var size = Math.min(wheel.width, wheel.height) - 10
             wheel.colorPicked(Colors.pointColor(mouse.x - 5, mouse.y - 5, size))
         }
-        onPressed: function(mouse) { pick(mouse) }
+        onPressed: function(mouse) { wheel.forceActiveFocus(); pick(mouse) }
+        onReleased: function(mouse) { pick(mouse); wheel.interactionFinished() }
+        onCanceled: wheel.interactionFinished()
         onPositionChanged: function(mouse) { if (pressed) pick(mouse) }
     }
     Keys.onPressed: function(event) {

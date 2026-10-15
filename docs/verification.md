@@ -18,3 +18,7 @@ Remote GitHub Actions were not run: the publishing token lacked workflow scope. 
 A real suspend on the reference PC exposed a bridge self-reexec/systemd restart race (90-second stop timeout), an empty early OpenRGB scan, and an indefinite readiness barrier. A later OpenRGB restart restored all seven controllers; the user confirmed that lighting commands and normal fan speeds returned. Telemetry then reported approximately 1320–1330 RPM for all three radiator fans and coolant at 36 °C. The fix removes the competing bridge restart, retries empty OpenRGB discovery once, and bounds waiting for absent selected controllers. Another physical suspend with the new code still needs observation; no automatic suspend was performed during the active session.
 
 Version 0.1.1: 82 tests passed with the real SDK installed; both OpenSpec changes passed strict validation, QML and the installed manifest validated. The updated user daemon reports seven controllers and no missing devices or errors.
+
+## Live color controls, version 0.1.2
+
+84 tests passed. A Qt ScrollView regression reproduced drag cancellation after only two color signals; pointer capture now preserves continuous dragging. A Quickshell Process integration regression reproduced one final write after continuous motion; throttling now sends bounded intermediate writes and preserves the final color. The native Omarchy panel was restarted and visually checked with rounded controls. No cooling settings were changed.

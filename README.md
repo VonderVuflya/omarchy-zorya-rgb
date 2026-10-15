@@ -57,7 +57,7 @@ See [hardware support](docs/hardware.md) and [lifecycle and permissions](docs/li
 
 ## Color and effects
 
-Click the wheel or enter a six-digit color. White selects `#FFFFFF`; brightness remains independently adjustable. Select devices in the **Devices** tab. Save a named preset to retain color, brightness, effect, speed and device selection together.
+Drag the wheel for live color changes, or enter a six-digit color. Drag updates are coalesced every 120 ms and the final color is sent on release. White selects `#FFFFFF`; brightness remains independently adjustable. Select devices in the **Devices** tab. Save a named preset to retain color, brightness, effect, speed and device selection together.
 
 ```sh
 zorya-rgb status

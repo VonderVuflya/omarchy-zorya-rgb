@@ -33,9 +33,11 @@ QtObject {
         revision++
         state = merged(state, patch)
         pending = merged(pending, patch)
-        debounce.restart()
+        // Throttle the stream: restarting on every move would wait for a pause.
+        if (!debounce.running) debounce.start()
     }
     function commitPending() {
+        debounce.stop()
         if (!Object.keys(pending).length) return
         var patch = pending
         pending = ({})
