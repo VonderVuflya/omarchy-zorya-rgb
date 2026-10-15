@@ -12,3 +12,9 @@ Checked on the reference Arch/Omarchy PC on 2026-10-15.
 Physical suspend/resume and long-duration lighting stability still need user observation with this new plugin. Recovery and reconnect failure paths are covered by automated tests. A clean hardware build on a machine without existing binaries has not been executed end to end; pinned source patches were checked separately. No universal device compatibility is claimed.
 
 Remote GitHub Actions were not run: the publishing token lacked workflow scope. The supplied CI template runs the Python suite on Python 3.11/3.14 and strict OpenSpec validation once activated.
+
+## Resume fix, version 0.1.1
+
+A real suspend on the reference PC exposed a bridge self-reexec/systemd restart race (90-second stop timeout), an empty early OpenRGB scan, and an indefinite readiness barrier. A later OpenRGB restart restored all seven controllers; the user confirmed that lighting commands and normal fan speeds returned. Telemetry then reported approximately 1320–1330 RPM for all three radiator fans and coolant at 36 °C. The fix removes the competing bridge restart, retries empty OpenRGB discovery once, and bounds waiting for absent selected controllers. Another physical suspend with the new code still needs observation; no automatic suspend was performed during the active session.
+
+Version 0.1.1: 82 tests passed with the real SDK installed; both OpenSpec changes passed strict validation, QML and the installed manifest validated. The updated user daemon reports seven controllers and no missing devices or errors.

@@ -80,15 +80,32 @@ def recovery(*,services=None,run=subprocess.run,readiness=None,timeout=60,probe=
     if any(unit not in UNITS for unit in selected):
         return dict(ok=False,services=selected,error='Refusing unmanaged recovery unit')
     try:
-        if selected:
-            run(['systemctl','--user','restart',*selected],check=True,capture_output=True,text=True,timeout=90)
+        automatic=services is None
+        # The bridge already re-execs itself after suspend. Sending SIGTERM at
+        # the same time can be lost across exec and leave systemd stopping it
+        # for 90 seconds, killing the newly initialized cooling controller.
+        restart=[unit for unit in selected if not automatic or unit!='zorya-lianli.service']
+        if automatic and selected:
+            time.sleep(3)  # USB/I2C nodes must settle before OpenRGB's one-shot scan.
+        if restart:
+            run(['systemctl','--user','restart',*restart],check=True,capture_output=True,text=True,timeout=30)
+
         if services is None and selected:
             endpoints=metadata.get('endpoints',{})
             deadline=time.monotonic()+timeout
             check=probe or _sdk_ready
             for unit in selected:
                 port=endpoints.get(unit,6743 if unit=='zorya-lianli.service' else 6742)
+                redetected=False
+                retry_at=time.monotonic()+min(5,timeout)
                 while not check(port):
+                    # OpenRGB does not rediscover devices through SDK update().
+                    # An empty early scan needs one later process restart.
+                    if unit=='zorya-openrgb.service' and not redetected and time.monotonic()>=retry_at:
+                        run(['systemctl','--user','restart',unit],check=True,capture_output=True,text=True,timeout=30)
+                        redetected=True
+                        deadline=time.monotonic()+timeout
+                        continue
                     if time.monotonic()>=deadline:raise TimeoutError(f'{unit} SDK discovery is not ready on port {port}')
                     time.sleep(.25)
         if readiness is not None:
@@ -108,7 +125,7 @@ def _sdk_ready(port):
         client=OpenRGBClient(address='127.0.0.1',port=port,name='Zorya recovery',protocol_version=1 if port==6743 else None)
         try:
             client.update()
-            return True  # SDK controller enumeration completed, even with an empty bus.
+            return bool(client.devices)  # A listening server with an empty early scan is not ready.
         finally:client.disconnect()
     except Exception:return False
 

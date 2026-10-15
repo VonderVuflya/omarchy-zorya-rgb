@@ -9,3 +9,5 @@ Sleep detection compares Linux BOOTTIME with MONOTONIC. Wall-clock adjustments a
 Installation, migration and uninstallation are explicit operations. Existing unit configuration and enabled/active states are tracked when compatible tools are adopted. Uninstallation stops Zorya-owned units, preserves saved state and restores adopted service state when recorded. It does not uninstall system packages or erase unrelated configurations.
 
 A polkit password may be requested for distribution build packages or narrow hardware access rules. Hardware builders run source compilation as the user. Original system OpenRGB executables and `/usr/share/omarchy` remain unchanged.
+
+Automatic resume lets the compatible Lian Li bridge perform its own re-exec; Zorya must not race that with systemctl stop/restart. OpenRGB starts after USB/I2C settles and an empty startup scan gets one delayed retry. Readiness waiting is bounded so an unavailable controller cannot indefinitely freeze lighting commands to healthy devices. Manual explicitly selected service restarts retain their previous behavior.

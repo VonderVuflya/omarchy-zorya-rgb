@@ -2,6 +2,7 @@
 from __future__ import annotations
 import fcntl
 import json
+import logging
 import os
 from pathlib import Path
 import signal
@@ -12,6 +13,7 @@ import time
 from .state import StateStore
 from .openrgb_backend import OpenRGBBackend
 
+LOG=logging.getLogger(__name__)
 MAX_MESSAGE=128*1024
 
 
@@ -58,14 +60,15 @@ class ZoryaDaemon:
         self.lock=threading.RLock(); self.stopping=threading.Event(); self.wake=threading.Event()
         self.revision=0; self.force=True; self.connected=False; self.error=None; self.device_cache=[]
         self.setup={'daemon':True}; self.applying=True; self.listener=None; self.worker=None
-        self.recovery_pending=False; self._next_recovery=0
+        self.recovery_pending=False; self._next_recovery=0; self._recovery_deadline=0
         self._lock_file=None
 
     def status(self):
         with self.lock:
             state=self.store.snapshot()
             state.update(connected=self.connected,error=self.error or self.store.error,
-                         setup=self.setup,device_count=len(self.device_cache),applying=self.applying)
+                         setup=self.setup,device_count=len(self.device_cache),applying=self.applying,
+                         missing_devices=sorted(set(state['devices'])-{d['id'] for d in self.device_cache}))
             return state
 
     def dispatch(self,message):
@@ -104,6 +107,7 @@ class ZoryaDaemon:
 
     def _recover(self):
         # Keep the barrier across coordinator failures and subsequent loop ticks.
+        LOG.info("Resume detected; coordinating RGB recovery")
         self.recovery_pending=True
         self.backend.close()
         with self.lock: self.connected=False; self.applying=True
@@ -114,16 +118,26 @@ class ZoryaDaemon:
             if not self._ready():
                 raise RuntimeError('Selected devices are not ready after resume')
             self.recovery_pending=False
+            LOG.info("RGB recovery discovery complete; applying saved settings")
             with self.lock: self.force=True
-        except Exception:
+        except Exception as exc:
+            LOG.warning("RGB recovery failed (%s); waiting for device discovery",type(exc).__name__)
             self._next_recovery=time.monotonic()+5
+            self._recovery_deadline=time.monotonic()+15
             raise
 
     def _retry_recovery(self,now):
         if now < self._next_recovery: return False
         self._next_recovery=now+5
         # Retry only SDK discovery. Do not repeatedly restart hardware services.
-        if not self._ready(): return False
+        ready=self._ready()
+        if not ready and now < self._recovery_deadline: return False
+        if ready:
+            LOG.info("RGB recovery discovery complete; applying saved settings")
+        else:
+            LOG.warning("RGB recovery deadline reached; applying available devices and reporting missing targets")
+        # A missing target must not freeze healthy targets forever. Backend apply
+        # isolates unavailable IDs and keeps reporting them while discovery retries.
         self.recovery_pending=False
         with self.lock: self.force=True; self.error=None
         return True
@@ -230,6 +244,7 @@ class ZoryaDaemon:
 
 
 def main():
+    logging.basicConfig(level=logging.INFO,format="%(levelname)s %(name)s: %(message)s")
     daemon=ZoryaDaemon()
     for sig in (signal.SIGINT,signal.SIGTERM): signal.signal(sig,lambda *_:daemon.stop())
     daemon.serve_forever()

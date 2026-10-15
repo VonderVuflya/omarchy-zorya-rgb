@@ -131,6 +131,11 @@ class BackendTests(unittest.TestCase):
         d=Device(); b=self.backend([d]); state=dict(DEFAULT_STATE,devices=[b.devices([])[0]['id']])
         b.apply(state,0); b.refresh(); b.apply(state,.1)
         self.assertEqual(len(d.mode_writes),1); self.assertEqual(len(d.writes),1)
+    def test_runtime_sdk_socket_uses_bounded_timeout(self):
+        values=[]; client=Client([Device()])
+        client.comms=types.SimpleNamespace(sock=types.SimpleNamespace(settimeout=values.append))
+        b=OpenRGBBackend(client_factory=lambda:client)
+        self.assertTrue(b.connect()); self.assertEqual(values,[3.0])
     def test_offline_is_visible(self):
         b=OpenRGBBackend(client_factory=lambda:(_ for _ in ()).throw(OSError('no server')))
         self.assertFalse(b.connect()); self.assertFalse(b.connected); self.assertIn('no server',b.error)

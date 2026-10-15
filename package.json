@@ -1,10 +1,10 @@
 {
   "name": "omarchy-zorya-rgb",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "OpenSpec development tooling for the ZoryaRGB Omarchy plugin",
   "scripts": {
-    "spec:validate": "openspec validate initial-zorya-rgb --strict",
+    "spec:validate": "openspec validate --all --strict",
     "spec:list": "openspec list"
   },
   "devDependencies": {

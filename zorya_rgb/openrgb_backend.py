@@ -56,6 +56,8 @@ class OpenRGBBackend:
             for host,port in self.endpoints:
                 try:
                     client=factory() if self.client_factory else factory(host,port)
+                    sock=getattr(getattr(client,'comms',None),'sock',None)
+                    if sock is not None: sock.settimeout(3.0)
                     self.clients.append(((host,port),client))
                 except Exception as exc:
                     self.endpoint_errors[str(port)]=str(exc)
@@ -117,6 +119,8 @@ class OpenRGBBackend:
             if (host,port) in present or self._factory is None: continue
             try:
                 client=self._factory() if self.client_factory else self._factory(host,port)
+                sock=getattr(getattr(client,'comms',None),'sock',None)
+                if sock is not None: sock.settimeout(3.0)
                 self.clients.append(((host,port),client))
                 self.endpoint_errors.pop(str(port),None)
             except Exception as exc:
@@ -175,7 +179,7 @@ class OpenRGBBackend:
 
     def apply(self,state,elapsed,force=False):
         selected=set(state['devices'])
-        errors={identity:'Selected device unavailable' for identity in selected-self.controllers.keys()}
+        errors={identity:'Selected device unavailable: '+identity for identity in selected-self.controllers.keys()}
         signature=tuple((key,str(state[key])) for key in ('on','color','brightness','effect','speed','secondary_color'))
         for identity,device in self.controllers.items():
             if identity not in selected:

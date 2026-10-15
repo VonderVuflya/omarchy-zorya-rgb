@@ -108,3 +108,22 @@ class RecoveryBarrierTests(unittest.TestCase):
                 self.assertTrue(backend.applied); self.assertEqual(len(coordinations),1)
             finally:
                 daemon.stop(); thread.join(2)
+
+    def test_missing_device_does_not_block_healthy_devices_after_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            backend=Backend(); store=StateStore(Path(tmp)/'state.json')
+            store.update({'devices':['test','late']})
+            daemon=ZoryaDaemon(store=store,backend=backend,recovery=lambda **kw:{'ok':False,'error':'restart timeout'})
+            with self.assertLogs('zorya_rgb.daemon',level='INFO') as events:
+                with self.assertRaises(RuntimeError): daemon._recover()
+            self.assertTrue(any('recovery failed' in line.lower() for line in events.output))
+            daemon._recovery_deadline=0; daemon._next_recovery=0
+            thread=threading.Thread(target=daemon._hardware_loop); thread.start()
+            try:
+                for _ in range(100):
+                    if backend.applied: break
+                    time.sleep(.01)
+                self.assertTrue(backend.applied)
+                self.assertFalse(daemon.recovery_pending)
+                self.assertEqual(daemon.status()['missing_devices'],['late'])
+            finally: daemon.stop(); thread.join(2)

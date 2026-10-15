@@ -232,3 +232,40 @@ class LianLiIpcTests(unittest.TestCase):
             root=Path(folder);actual=root/'real';actual.mkdir(mode=0o700)
             link=root/'link';link.symlink_to(actual)
             with self.assertRaises(PermissionError):hardware._lianli_ipc('ListDevices',runtime_dir=link)
+
+
+class ResumeCoordinationTests(unittest.TestCase):
+    def test_automatic_resume_does_not_race_bridge_self_restart(self):
+        from unittest.mock import patch
+        calls=[]
+        def run(argv,**kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv,0,'','')
+        with patch.object(setup,'_metadata',return_value={'hardware_units':['zorya-openrgb.service','zorya-lianli.service']}),patch.object(setup.time,'sleep'):
+            result=setup.recovery(run=run,probe=lambda port:True)
+        self.assertTrue(result['ok'])
+        self.assertEqual(calls,[['systemctl','--user','restart','zorya-openrgb.service']])
+
+    def test_empty_openrgb_scan_is_redetected_once_without_restarting_bridge(self):
+        from unittest.mock import patch
+        calls=[];probes=[]
+        def run(argv,**kw):
+            calls.append(argv);return subprocess.CompletedProcess(argv,0,'','')
+        def probe(port):
+            probes.append(port)
+            return port!=6742 or len(calls)>1
+        with patch.object(setup,'_metadata',return_value={'hardware_units':['zorya-openrgb.service','zorya-lianli.service']}),patch.object(setup.time,'sleep'):
+            result=setup.recovery(run=run,probe=probe,timeout=0)
+        self.assertTrue(result['ok'])
+        self.assertEqual(calls,[['systemctl','--user','restart','zorya-openrgb.service']]*2)
+        self.assertIn(6743,probes)
+
+    def test_listening_sdk_with_zero_controllers_is_not_ready(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        import sys
+        closed=[]
+        client=SimpleNamespace(devices=[],update=lambda:None,disconnect=lambda:closed.append(True))
+        with patch.dict(sys.modules,{'openrgb':SimpleNamespace(OpenRGBClient=lambda **kw:client)}):
+            self.assertFalse(setup._sdk_ready(6742))
+        self.assertEqual(closed,[True])
