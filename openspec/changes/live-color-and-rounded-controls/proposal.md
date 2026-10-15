@@ -6,5 +6,7 @@ Dragging the color wheel inside the panel loses its mouse grab to ScrollView. Re
 - Send coalesced color changes at bounded intervals during continuous movement.
 - Round themed action controls, tabs and dropdown surfaces with clear interaction states.
 
+- Anchor the panel to its bar widget using the native screen-edge clamping.
+
 ## Impact
 QML only; backend, fan curves and selected scenes remain compatible.

@@ -148,7 +148,7 @@ Ui.Panel {
         owner: root.barIdentity
         bar: root.bar
         open: root.opened
-        centerOnBar: true
+        centerOnBar: false
         contentWidth: card.fittedContentWidth(480)
         contentHeight: card.fittedContentHeight(620)
         focusTarget: content

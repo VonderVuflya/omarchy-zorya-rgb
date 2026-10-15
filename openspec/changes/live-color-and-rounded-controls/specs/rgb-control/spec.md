@@ -13,3 +13,10 @@ The panel SHALL use rounded theme-aware controls with visible keyboard focus, ho
 #### Scenario: Theme controls
 - **WHEN** the user opens the panel
 - **THEN** actions, tabs and selection controls use consistent rounded surfaces and readable foregrounds.
+
+### Requirement: Widget-anchored panel
+The panel SHALL open adjacent to its bar widget and stay within screen margins instead of centering across the bar.
+
+#### Scenario: Widget on the right of the top bar
+- **WHEN** the user opens Zorya from the right-hand bar widget
+- **THEN** the panel appears beneath that widget and is clamped to the screen edge.
