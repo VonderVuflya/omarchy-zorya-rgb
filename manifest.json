@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "vondervuflya.zorya-rgb",
   "name": "ZoryaRGB",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "author": "Sergey Cherkashin",
   "license": "GPL-3.0-or-later",
   "description": "Color, effects and saved lighting scenes for OpenRGB and supported Lian Li devices",

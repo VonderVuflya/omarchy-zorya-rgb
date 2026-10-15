@@ -25,6 +25,11 @@ def normalize_mode(original):
     return mode
 
 
+def _default_onboard_pulse(device,state):
+    from .lianli_effects import start_pulse
+    return start_pulse(device,state)
+
+
 def _metadata(device, key):
     value=getattr(device,key,None)
     if value is None: value=getattr(getattr(device,'metadata',None),key,None)
@@ -33,7 +38,8 @@ def _metadata(device, key):
 
 
 class OpenRGBBackend:
-    def __init__(self,client_factory=None,color_factory=None,endpoints=None):
+    def __init__(self,client_factory=None,color_factory=None,endpoints=None,onboard_pulse=None):
+        self.onboard_pulse=onboard_pulse if onboard_pulse is not None else (_default_onboard_pulse if client_factory is None else None)
         self.client_factory=client_factory
         self._factory=None
         self.color_factory=color_factory
@@ -141,11 +147,11 @@ class OpenRGBBackend:
     def _pick_mode(self,device,state):
         modes=list(device.modes)
         effect=state['effect'] if state['on'] else 'static'
-        if effect in ('pulse','rainbow'):
+        if effect in ('pulse','rainbow') and not (effect=='pulse' and self._prefer_direct_pulse(device)):
             wanted=('pulse','breathing','breath') if effect=='pulse' else ('rainbow','color cycle','spectrum cycle')
             for mode in modes:
                 flags=int(mode.flags)
-                if mode.name.lower() in wanted and flags & HAS_SPEED and (state['brightness']==100 or flags & HAS_BRIGHTNESS):
+                if mode.name.lower() in wanted and flags & HAS_SPEED and (effect=='pulse' or state['brightness']==100 or flags & HAS_BRIGHTNESS):
                     if effect=='pulse' and not flags & (PER_LED|MODE_COLORS): continue
                     return mode,True
         wanted=('static','direct') if effect=='static' else ('direct','static')
@@ -167,12 +173,38 @@ class OpenRGBBackend:
             mode.speed=round(low+(high-low)*(state['speed']-.1)/4.9)
         if int(mode.flags)&MODE_COLORS:
             count=max(1,mode.colors_min or 1)
-            color=rgb(state['color']) if native else frame(state,1,0)[0]
+            color=self._native_color(state,int(mode.flags)) if native else frame(state,1,0)[0]
             mode.colors=[self._color(*color) for _ in range(count)]
         device.set_mode(mode)
         # SDK set_mode refreshes the device. Normalize refreshed modes too.
         device.modes=[normalize_mode(m) for m in device.modes]
+        if state['on'] and state['effect']=='pulse' and self.onboard_pulse is not None:
+            if self.onboard_pulse(device,state): return True,int(mode.flags),True
         return native,int(mode.flags),int(getattr(mode,'color_mode',0))==2
+
+    @staticmethod
+    def _native_color(state,flags):
+        color=rgb(state['color'])
+        if state['effect']=='pulse' and not flags & HAS_BRIGHTNESS:
+            return tuple(round(value*state['brightness']/100) for value in color)
+        return color
+
+    @staticmethod
+    def _prefer_direct_pulse(device):
+        # This controller's built-in Pulse steps visibly. Its dedicated NVIDIA
+        # channel can use Direct frames without increasing motherboard SMBus load.
+        return ('gigabyte aorus geforce rtx 5080' in str(getattr(device,'name','')).lower()
+                and 'nvidia i2c adapter' in _metadata(device,'location').lower()
+                and any(mode.name.lower()=='direct' and int(mode.flags)&PER_LED
+                        for mode in device.modes))
+
+    @staticmethod
+    def _frame_interval(device):
+        if OpenRGBBackend._prefer_direct_pulse(device): return 1/30
+        location=_metadata(device,'location').lower()
+        descriptor=(str(getattr(device,'name',''))+' '+location).lower()
+        if 'wireless' in descriptor or 'rf:' in descriptor or 'i2c' in descriptor: return .5
+        return 1/30 if location.startswith(('hid:','usb:')) else .5
 
     def _color(self,*color):
         return self.color_factory(*color) if self.color_factory else color
@@ -198,14 +230,14 @@ class OpenRGBBackend:
                     _,native,flags,palette=previous
                 static=not state['on'] or state['effect']=='static'
                 if not changed and (static or native): continue
-                # Conservative bus rate: never queue >2 frames/sec per device.
-                if not changed and elapsed-self._last_frame.get(identity,-1)<.5: continue
+                # Explicit USB/HID transports can stream; unknown buses stay capped.
+                if not changed and elapsed-self._last_frame.get(identity,-1)<self._frame_interval(device): continue
                 if palette:
                     self._last_frame[identity]=elapsed
                     self.device_errors.pop(identity,None); self._retry_after.pop(identity,None)
                     continue
                 if native:
-                    colors=[rgb(state['color'])]*len(device.leds)
+                    colors=[self._native_color(state,flags)]*len(device.leds)
                 else:
                     colors=frame(state,len(device.leds),elapsed)
                 device.set_colors([self._color(*c) for c in colors],fast=True)

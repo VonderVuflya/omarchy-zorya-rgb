@@ -9,3 +9,5 @@ The installer fetches exact commits and verifies HEAD before applying patches. S
 A successful build is not proof of a physical RGB effect or a completed suspend/resume test. See the project compatibility report for tested hardware and remaining limitations.
 
 The bundled Lian Li patch also narrows its user-local IPC socket from mode0666 to0600. Zorya validates the runtime directory, socket ownership/type and connected peer UID before sending any IPC request. Pairing is an explicit action for a currently listed unbound device; neither setup, discovery nor polling sends bind commands.
+
+`lianli-onboard-replay.patch` applies after `lianli-rgb-compat.patch` under the same MIT terms. It preserves complete buffered animations during drift recovery, adds a read-only replay-safety capability probe, and bounds animation payloads. Cooling policy is unchanged.

@@ -1,0 +1,194 @@
+diff --git a/crates/lianli-daemon/src/ipc_server.rs b/crates/lianli-daemon/src/ipc_server.rs
+--- a/crates/lianli-daemon/src/ipc_server.rs
++++ b/crates/lianli-daemon/src/ipc_server.rs
+@@ -318,6 +318,8 @@
+                 Err(e) => IpcResponse::error(format!("failed to write config: {e}")),
+             }
+         }
++
++        IpcRequest::GetRgbAnimationSupport => rgb_animation_support_response(),
+ 
+         IpcRequest::GetRgbCapabilities => {
+             let state = state.lock();
+@@ -821,3 +823,27 @@
+     writer.flush()?;
+     Ok(())
+ }
++
++fn rgb_animation_support_response() -> IpcResponse {
++    IpcResponse::ok(serde_json::json!({
++        "onboard_frames": true,
++        "replay_safe": true,
++        "max_raw_bytes": 48000,
++    }))
++}
++
++#[cfg(test)]
++mod animation_support_tests {
++    use super::*;
++
++    #[test]
++    fn animation_handshake_advertises_replay_and_bounded_uploads() {
++        let response = serde_json::to_value(rgb_animation_support_response()).unwrap();
++        assert_eq!(response["status"], "ok");
++        assert_eq!(response["data"]["onboard_frames"], true);
++        assert_eq!(response["data"]["replay_safe"], true);
++        assert_eq!(response["data"]["max_raw_bytes"], 48000);
++        let request: IpcRequest = serde_json::from_str(r#"{"method":"GetRgbAnimationSupport"}"#).unwrap();
++        assert!(matches!(request, IpcRequest::GetRgbAnimationSupport));
++    }
++}
+diff --git a/crates/lianli-daemon/src/rgb_controller/mod.rs b/crates/lianli-daemon/src/rgb_controller/mod.rs
+--- a/crates/lianli-daemon/src/rgb_controller/mod.rs
++++ b/crates/lianli-daemon/src/rgb_controller/mod.rs
+@@ -280,6 +280,14 @@
+             if !state.led_state_sent {
+                 continue;
+             }
++            match wireless.replay_cached_rgb(&state.mac) {
++                Ok(true) => continue,
++                Ok(false) => {}, // No successful upload cached: retain the static fallback.
++                Err(e) => {
++                    debug!("Cached RGB replay failed for {device_id}: {e}");
++                    continue; // A partial animation upload must not be replaced by a static frame.
++                }
++            }
+             let idx = effect_index_from_state(&state.led_state);
+             if let Err(e) = wireless.send_rgb_direct(&state.mac, &state.led_state, &idx, 2) {
+                 debug!("Drift re-send failed for {device_id}: {e}");
+@@ -310,10 +318,14 @@
+         if frames.is_empty() {
+             anyhow::bail!("no frames supplied");
+         }
++        anyhow::ensure!(frames.len() <= 160, "onboard RGB accepts at most 160 frames");
++        anyhow::ensure!(interval_ms > 0, "RGB frame interval must be positive");
+         if let (Some(ref wireless), Some(state)) =
+             (&self.wireless, self.wireless_state.get_mut(device_id))
+         {
+             let want = state.led_state.len();
++            anyhow::ensure!(want > 0 && want <= 255, "RGB LED count is outside the RF protocol range");
++            anyhow::ensure!(frames.len() * want * 3 <= 48000, "onboard RGB upload exceeds 48000 raw bytes");
+             for (i, f) in frames.iter().enumerate() {
+                 if f.len() != want {
+                     anyhow::bail!("frame {i} has {} LEDs, device has {want}", f.len());
+diff --git a/crates/lianli-devices/src/wireless/rgb.rs b/crates/lianli-devices/src/wireless/rgb.rs
+--- a/crates/lianli-devices/src/wireless/rgb.rs
++++ b/crates/lianli-devices/src/wireless/rgb.rs
+@@ -6,6 +6,21 @@
+ use tracing::debug;
+ 
+ impl WirelessController {
++    /// Replay the complete last accepted RGB upload without changing fan/PWM state.
++    /// Keep cache -> TX -> desired-effect lock ordering identical to RGB uploads.
++    pub fn replay_cached_rgb(&self, mac: &[u8; 6]) -> Result<bool> {
++        let device = self.discovered_devices.lock().iter()
++            .find(|device| &device.mac == mac).cloned()
++            .context("device not found for RGB replay")?;
++        let cache = self.rgb_packets.lock();
++        let Some(packets) = cache.get(mac) else { return Ok(false); };
++        let effect_index = self.tx_recover(|handle| {
++            replay_rgb_packets(packets, |packet| self.send_rf_packet(handle, &device, packet))
++        })?;
++        self.desired_effects.lock().insert(*mac, effect_index);
++        Ok(true)
++    }
++
+     /// Send a single frame of per-LED RGB colors to a wireless device.
+     pub fn send_rgb_direct(
+         &self,
+@@ -89,7 +104,9 @@
+         let compressed = crate::tinyuz::compress(raw_rgb).context("failed to compress RGB data")?;
+ 
+         const LZO_RF_VALID_LEN: usize = 220;
+-        let total_pk_num = (compressed.len() as f64 / LZO_RF_VALID_LEN as f64).ceil() as u8;
++        let data_packets = compressed.len().div_ceil(LZO_RF_VALID_LEN);
++        anyhow::ensure!(data_packets <= 254, "compressed RGB upload exceeds RF packet capacity");
++        let total_pk_num = data_packets as u8;
+ 
+         // Serialize cache updates with PWM transactions: a speed command must
+         // replay the latest complete RGB upload, including animation payloads.
+@@ -169,3 +186,72 @@
+         Ok(())
+     }
+ }
++
++/// Validate the complete cached transaction before writing, then preserve order
++/// and original header gaps. Return its animation identity only after success.
++fn replay_rgb_packets(
++    packets: &[(Vec<u8>, u64)],
++    mut send: impl FnMut(&[u8]) -> Result<()>,
++) -> Result<[u8; 4]> {
++    anyhow::ensure!(!packets.is_empty(), "empty RGB replay cache");
++    anyhow::ensure!(packets.iter().all(|(packet, _)| {
++        packet.len() == RF_DATA_SIZE && packet[0] == RF_SELECT && packet[1] == RF_SET_RGB
++    }), "invalid RGB replay cache");
++    let header = &packets[0].0;
++    anyhow::ensure!(header[18] == 0, "RGB replay cache has no header");
++    let effect_index: [u8; 4] = header[14..18].try_into().unwrap();
++    for (packet, gap_ms) in packets {
++        send(packet)?;
++        if *gap_ms > 0 { thread::sleep(Duration::from_millis(*gap_ms)); }
++    }
++    Ok(effect_index)
++}
++
++#[cfg(test)]
++mod cached_replay_tests {
++    use super::*;
++
++    fn animation() -> Vec<(Vec<u8>, u64)> {
++        let mut header = vec![0; RF_DATA_SIZE];
++        header[0] = RF_SELECT;
++        header[1] = RF_SET_RGB;
++        header[14..18].copy_from_slice(&[1, 3, 5, 7]);
++        header[26] = 64;
++        let mut payload = header.clone();
++        payload[18] = 1;
++        payload[20..24].copy_from_slice(&[42, 43, 44, 45]);
++        vec![(header.clone(), 0), (header, 0), (payload, 0)]
++    }
++
++    #[test]
++    fn cached_replay_preserves_animation_frames_and_effect_identity() {
++        let packets = animation();
++        let mut sent = Vec::new();
++        let index = replay_rgb_packets(&packets, |packet| {
++            sent.push(packet.to_vec());
++            Ok(())
++        }).unwrap();
++        assert_eq!(index, [1, 3, 5, 7]);
++        assert_eq!(sent, packets.iter().map(|(data, _)| data.clone()).collect::<Vec<_>>());
++        assert_eq!(sent[0][26], 64);
++        assert_eq!(&sent[2][20..24], &[42, 43, 44, 45]);
++    }
++
++    #[test]
++    fn cached_replay_stops_on_transport_error() {
++        let mut calls = 0;
++        let result = replay_rgb_packets(&animation(), |_| {
++            calls += 1;
++            anyhow::bail!("transport offline")
++        });
++        assert!(result.is_err());
++        assert_eq!(calls, 1);
++    }
++
++    #[test]
++    fn malformed_cache_cannot_send_any_packet() {
++        let mut packets = animation();
++        packets[2].0.truncate(17);
++        assert!(replay_rgb_packets(&packets, |_| panic!("invalid cache was sent")).is_err());
++    }
++}
+diff --git a/crates/lianli-shared/src/ipc.rs b/crates/lianli-shared/src/ipc.rs
+--- a/crates/lianli-shared/src/ipc.rs
++++ b/crates/lianli-shared/src/ipc.rs
+@@ -30,6 +30,8 @@
+     GetTelemetry,
+     /// Get RGB capabilities for all devices.
+     GetRgbCapabilities,
++    /// Read-only feature handshake for bounded, replay-safe onboard RGB uploads.
++    GetRgbAnimationSupport,
+     /// Set RGB effect for a specific device zone.
+     SetRgbEffect {
+         device_id: String,

@@ -103,7 +103,13 @@ def ensure_rust():
 
 def build_lianli(root):
     dependencies('lianli')
-    source=checkout('lianli',root/'source');apply_patch(source,'lianli-rgb-compat.patch')
+    source=checkout('lianli',root/'source')
+    # The supplement changes compatibility-patched lines. Detect it first,
+    # otherwise reverse-checking the older patch on a second build can fail.
+    supplement=ROOT/'patches/lianli-onboard-replay.patch'
+    if subprocess.run(['git','-C',str(source),'apply','--reverse','--check',str(supplement)],capture_output=True).returncode:
+        apply_patch(source,'lianli-rgb-compat.patch')
+        apply_patch(source,'lianli-onboard-replay.patch')
     deps=root/'deps';deps.mkdir(parents=True,exist_ok=True)
     # Pin FFmpeg8 locally. Do not replace the system FFmpeg or load EVDI DKMS.
     if not (deps/'lib/libavcodec.so').exists():
@@ -209,7 +215,12 @@ def setup(component,data,adopt_only=False):
             settings.setdefault('rgb',{}).update(openrgb_server=True,openrgb_port=6743)
             adopted_config.write_text(json.dumps(settings,indent=2))
             argv[argv.index('--config')+1]=str(adopted_config)
-            if not adopt_only:privileged_rules(name,buildroot)
+            if not adopt_only:
+                # Explicit setup upgrades the bridge as well as adopting its
+                # cooling policy. Runtime installation still only adopts tools.
+                executable=build_lianli(buildroot)
+                argv=[str(executable),*[arg for arg in argv[1:] if arg!='--rgb-only']]
+                privileged_rules(name,buildroot)
         elif name=='lianli':
             executable=build_lianli(buildroot)
             config=cfg/'lianli-rgb.json'

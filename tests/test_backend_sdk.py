@@ -68,6 +68,7 @@ class BackendTests(unittest.TestCase):
         for t in (0,.5,1): b.apply(state,t)
         self.assertEqual(len(d.mode_writes),1); self.assertEqual(d.mode_writes[0].name,'Pulse')
         self.assertEqual(len(d.writes),1); self.assertGreater(d.mode_writes[0].brightness,1)
+        self.assertEqual(d.writes[0],[(255,255,255)]*4)
     def test_data_metadata_identity_is_independent_of_sdk_order(self):
         first=Device(); second=Device()
         del first.location; del first.serial; del second.location; del second.serial
@@ -136,6 +137,54 @@ class BackendTests(unittest.TestCase):
         client.comms=types.SimpleNamespace(sock=types.SimpleNamespace(settimeout=values.append))
         b=OpenRGBBackend(client_factory=lambda:client)
         self.assertTrue(b.connect()); self.assertEqual(values,[3.0])
+    def test_native_gpu_pulse_without_brightness_scales_color_and_never_streams(self):
+        d=Device(); pulse=copy.deepcopy(d.modes[0]); pulse.id=2; pulse.name='Pulse'
+        pulse.flags=289; pulse.speed_min=1; pulse.speed_max=6; pulse.speed=3
+        d.modes.append(pulse); b=self.backend([d]); state=dict(DEFAULT_STATE,devices=[b.devices([])[0]['id']],effect='pulse',brightness=27,color='#FF8040')
+        for elapsed in (0,.5,1): b.apply(state,elapsed)
+        self.assertEqual([m.name for m in d.mode_writes],['Pulse'])
+        self.assertEqual(d.writes,[[(69,35,17)]*4]); self.assertEqual(d.saves,0)
+    def test_native_palette_pulse_without_brightness_scales_palette(self):
+        d=Device(); pulse=copy.deepcopy(d.modes[0]); pulse.id=2; pulse.name='Breath'
+        pulse.flags=65; pulse.color_mode=2; pulse.colors_min=pulse.colors_max=1
+        pulse.speed_min=10; pulse.speed_max=1; pulse.speed=3
+        d.modes.append(pulse); b=self.backend([d]); state=dict(DEFAULT_STATE,devices=[b.devices([])[0]['id']],effect='pulse',brightness=27,color='#FF8040')
+        for elapsed in (0,.5,1): b.apply(state,elapsed)
+        self.assertEqual([m.name for m in d.mode_writes],['Breath'])
+        self.assertEqual(d.mode_writes[0].colors,[(69,35,17)]); self.assertEqual(d.writes,[])
+    def test_onboard_pulse_uploads_once_and_reuploads_changed_state(self):
+        d=Device(name='Lian Li Wireless',location='RF:unit'); calls=[]
+        def onboard(device,state):
+            self.assertTrue(device.mode_writes); calls.append(state.copy()); return True
+        b=OpenRGBBackend(client_factory=lambda:Client([d]),color_factory=lambda *c:c,onboard_pulse=onboard)
+        b.connect(); state=dict(DEFAULT_STATE,devices=[b.devices([])[0]['id']],effect='pulse')
+        b.apply(state,0); b.apply(state,.1); self.assertEqual(len(calls),1); self.assertEqual(d.writes,[])
+        state['brightness']=27; b.apply(state,.2); self.assertEqual(len(calls),2)
+        state['effect']='static'; b.apply(state,.3); self.assertEqual(len(calls),2); self.assertEqual(len(d.writes),1)
+        replacement=Device(name=d.name,location=d.location)
+        b.clients[0][1].devices=[replacement]; b.refresh(); state['effect']='pulse'; b.apply(state,.4)
+        self.assertEqual(len(calls),3); self.assertEqual(replacement.writes,[])
+    def test_explicit_usb_fallback_streams_faster_but_i2c_and_rf_are_capped(self):
+        usb=Device(name='Keyboard',location='HID: /dev/hidraw2')
+        i2c=Device(location='I2C: adapter address 0x75'); rf=Device(name='Lian',location='USB: Wireless RF unit')
+        b=self.backend([usb,i2c,rf]); state=dict(DEFAULT_STATE,devices=[d['id'] for d in b.devices([])],effect='rainbow')
+        for elapsed in (0,.04,.08): b.apply(state,elapsed)
+        self.assertEqual(len(usb.writes),3); self.assertEqual(len(i2c.writes),1); self.assertEqual(len(rf.writes),1)
+    def test_known_aorus_5080_pulse_streams_direct_at_30fps(self):
+        known=Device(name='Gigabyte AORUS GeForce RTX 5080 MASTER ICE',location='I2C: NVIDIA i2c adapter 1 at 1:00.0 (/dev/i2c-2), address 0x75')
+        unknown=Device(name='Different GPU',location='I2C: NVIDIA i2c adapter 1 at 2:00.0 (/dev/i2c-3), address 0x75')
+        for device in (known,unknown):
+            pulse=copy.deepcopy(device.modes[0]); pulse.id=2; pulse.name='Pulse'; pulse.flags=289
+            pulse.speed_min=1; pulse.speed_max=6; pulse.speed=3; device.modes.append(pulse)
+        b=self.backend([known,unknown]); state=dict(DEFAULT_STATE,devices=[d['id'] for d in b.devices([])],effect='pulse',brightness=27,color='#FF8040')
+        for elapsed in (0,.04,.08): b.apply(state,elapsed)
+        self.assertEqual([m.name for m in known.mode_writes],['Direct'])
+        self.assertEqual(len(known.writes),3)
+        self.assertEqual([m.name for m in unknown.mode_writes],['Pulse'])
+        self.assertEqual(len(unknown.writes),1)
+    def test_aorus_name_on_smbus_has_no_fast_direct_exception(self):
+        device=Device(name='Gigabyte AORUS GeForce RTX 5080 MASTER',location='I2C: SMBus PIIX4 adapter port 0, address 0x75')
+        self.assertEqual(OpenRGBBackend._frame_interval(device),.5)
     def test_offline_is_visible(self):
         b=OpenRGBBackend(client_factory=lambda:(_ for _ in ()).throw(OSError('no server')))
         self.assertFalse(b.connect()); self.assertFalse(b.connected); self.assertIn('no server',b.error)

@@ -68,7 +68,7 @@ zorya-rgb set --json '{"effect":"gradient","color":"#00E5FF","secondary_color":"
 zorya-rgb preset save "Evening"
 ```
 
-Native device modes are used when compatible. Software fallback rendering is limited to two frames per second to avoid flooding SMBus/RF controllers. Some devices do not offer every mode; unsupported operations are shown as device errors instead of silently pretending to succeed.
+Native device modes are used when compatible. Supported Lian Li wireless controllers run pulse from a smooth onboard frame loop with the updated bridge. Software fallback may run at up to 30 FPS for USB/HID devices; SMBus/RF/unknown devices retain a conservative two-FPS limit. Some devices do not offer every mode; unsupported operations are shown as device errors instead of silently pretending to succeed.
 
 ## Remove
 

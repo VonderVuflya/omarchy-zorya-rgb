@@ -146,6 +146,7 @@ class ZoryaDaemon:
         detector=SleepDetector(); origin=time.monotonic(); next_connect=0; next_discovery=0; old_ids=()
         while not self.stopping.is_set():
             now=time.monotonic()
+            interval=.1
             try:
                 boot=time.clock_gettime(time.CLOCK_BOOTTIME) if hasattr(time,'CLOCK_BOOTTIME') else now
                 if detector.check(now,boot): self._recover()
@@ -170,6 +171,7 @@ class ZoryaDaemon:
                         ids=tuple(d['id'] for d in self.device_cache)
                         if ids!=old_ids: self.force=True; old_ids=ids
                         state=self.store.snapshot(); revision=self.revision; force=self.force; self.force=False
+                    if state['on'] and state['effect']!='static': interval=1/30
                     result=self.backend.apply(state,now-origin,force=force)
                     with self.lock:
                         self.error='; '.join(result.get('errors',{}).values()) or self.backend.error
@@ -177,7 +179,7 @@ class ZoryaDaemon:
                     self._cache()
             except Exception as exc:
                 with self.lock: self.error=str(exc); self.applying=False
-            self.wake.wait(.1); self.wake.clear()
+            self.wake.wait(interval); self.wake.clear()
         self.backend.close()
 
     def _claim(self):
