@@ -81,6 +81,7 @@ def recovery(*,services=None,run=subprocess.run,readiness=None,timeout=60,probe=
         return dict(ok=False,services=selected,error='Refusing unmanaged recovery unit')
     try:
         automatic=services is None
+        openrgb_redetected=False
         # The bridge already re-execs itself after suspend. Sending SIGTERM at
         # the same time can be lost across exec and leave systemd stopping it
         # for 90 seconds, killing the newly initialized cooling controller.
@@ -104,13 +105,23 @@ def recovery(*,services=None,run=subprocess.run,readiness=None,timeout=60,probe=
                     if unit=='zorya-openrgb.service' and not redetected and time.monotonic()>=retry_at:
                         run(['systemctl','--user','restart',unit],check=True,capture_output=True,text=True,timeout=30)
                         redetected=True
+                        openrgb_redetected=True
                         deadline=time.monotonic()+timeout
                         continue
                     if time.monotonic()>=deadline:raise TimeoutError(f'{unit} SDK discovery is not ready on port {port}')
                     time.sleep(.25)
         if readiness is not None:
             deadline=time.monotonic()+timeout
+            retry_at=time.monotonic()+min(5,timeout)
             while not readiness():
+                # A nonempty SDK can still have missed I2C devices at startup.
+                # SDK update only refreshes its existing inventory, so retry
+                # hardware discovery once when the selected inventory is partial.
+                if automatic and 'zorya-openrgb.service' in selected and not openrgb_redetected and time.monotonic()>=retry_at:
+                    run(['systemctl','--user','restart','zorya-openrgb.service'],check=True,capture_output=True,text=True,timeout=30)
+                    openrgb_redetected=True
+                    deadline=time.monotonic()+timeout
+                    continue
                 if time.monotonic()>=deadline:
                     raise TimeoutError('Hardware discovery did not become ready after resume')
                 time.sleep(.25)

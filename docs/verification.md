@@ -26,3 +26,7 @@ Version 0.1.1: 82 tests passed with the real SDK installed; both OpenSpec change
 ## Smooth pulse, version 0.1.4
 
 96 Python tests passed with the SDK installed; 36 bridge Rust tests passed. The bridge supplement applied after the full compatibility patch on the exact upstream pin, with repeat-build detection verified. Live buffered uploads of150 frames at33 ms were accepted by both wireless controllers. The user confirmed that the cooler pulse became smooth. The GPU's native Pulse remained visibly stepped; the tested AORUS RTX5080/NVIDIA-adapter profile now uses Direct software pulse at up to30 FPS, and the user confirmed smooth output afterward. Twenty acknowledged GPU updates at30 FPS averaged0.32 ms (maximum0.52 ms) per SDK update. No fan curve was changed.
+
+## Partial discovery recovery, version 0.1.5
+
+A real2026-10-16 resume left the SDK with USB devices but neither RAM nor GPU. Both I2C nodes were accessible to the user at diagnosis; one later owned OpenRGB restart restored the seven-controller inventory and cleared both missing IDs without altering selection. The automatic coordinator now retries a partially populated selected inventory once, sharing its budget with the existing empty-scan retry.98 Python tests, all OpenSpec changes, QML and the installed manifest validated. Another physical suspend with this update remains to be observed.

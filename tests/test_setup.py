@@ -269,3 +269,23 @@ class ResumeCoordinationTests(unittest.TestCase):
         with patch.dict(sys.modules,{'openrgb':SimpleNamespace(OpenRGBClient=lambda **kw:client)}):
             self.assertFalse(setup._sdk_ready(6742))
         self.assertEqual(closed,[True])
+
+    def test_partial_scan_is_redetected_once_when_selected_devices_are_missing(self):
+        from unittest.mock import patch
+        calls=[]
+        def run(argv,**kw):
+            calls.append(argv);return subprocess.CompletedProcess(argv,0,'','')
+        with patch.object(setup,'_metadata',return_value={'hardware_units':['zorya-openrgb.service','zorya-lianli.service']}),patch.object(setup.time,'sleep'):
+            result=setup.recovery(run=run,probe=lambda port:True,readiness=lambda:len(calls)>1,timeout=0)
+        self.assertTrue(result['ok'],'A partially populated SDK must trigger a real hardware rescan')
+        self.assertEqual(calls,[['systemctl','--user','restart','zorya-openrgb.service']]*2)
+
+    def test_empty_and_partial_discovery_share_one_redetection_budget(self):
+        from unittest.mock import patch
+        calls=[]
+        def run(argv,**kw):
+            calls.append(argv);return subprocess.CompletedProcess(argv,0,'','')
+        with patch.object(setup,'_metadata',return_value={'hardware_units':['zorya-openrgb.service','zorya-lianli.service']}),patch.object(setup.time,'sleep'):
+            result=setup.recovery(run=run,probe=lambda port:port!=6742 or len(calls)>1,readiness=lambda:False,timeout=0)
+        self.assertFalse(result['ok'])
+        self.assertEqual(calls,[['systemctl','--user','restart','zorya-openrgb.service']]*2)
