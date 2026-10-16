@@ -19,6 +19,13 @@ LOG=logging.getLogger(__name__)
 MAX_MESSAGE=128*1024
 
 
+def _bounded_error(error):
+    if not error:return error
+    error=str(error)
+    while len(json.dumps(error).encode())>6000:error=error[:len(error)//2]
+    return error
+
+
 def default_socket_path():
     runtime=os.environ.get('XDG_RUNTIME_DIR')
     base=Path(runtime) if runtime else Path(os.environ.get('XDG_CACHE_HOME',Path.home()/'.cache'))
@@ -69,10 +76,7 @@ class ZoryaDaemon:
     def status(self):
         with self.lock:
             state=self.store.snapshot()
-            error=self.error or self.store.error
-            if error:
-                error=str(error)
-                while len(json.dumps(error).encode())>6000:error=error[:len(error)//2]
+            error=_bounded_error(self.error or self.store.error)
             state.update(connected=self.connected,error=error,
                          setup=self.setup,device_count=len(self.device_cache),applying=self.applying,
                          missing_devices=sorted(set(state['devices'])-{d['id'] for d in self.device_cache}),
@@ -99,7 +103,7 @@ class ZoryaDaemon:
             with self.lock:
                 selected=set(self.store.snapshot()['devices'])
                 devices=[dict(d,selected=d['id'] in selected) for d in self.device_cache]
-                return {'devices':devices,'error':self.error or self.store.error}
+                return {'devices':devices,'error':_bounded_error(self.error or self.store.error)}
         with self.lock:
             if command=='set': self.store.update(message.get('patch'))
             elif command=='preset_save': self.store.save_preset(message.get('name'))

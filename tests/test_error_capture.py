@@ -50,6 +50,7 @@ class ErrorCaptureTests(unittest.TestCase):
             daemon._remember_error('🔥'*4000,'hardware','🔥'*16000)
             import json
             self.assertLess(len(json.dumps(daemon.status()).encode()),40000)
+            self.assertLess(len(json.dumps(daemon.dispatch({'command':'devices'})).encode()),10000)
             first=daemon.status()['last_error']['at']
             daemon._remember_error('🔥'*4000,'hardware','🔥'*16000)
             self.assertEqual(daemon.status()['last_error']['at'],first)
