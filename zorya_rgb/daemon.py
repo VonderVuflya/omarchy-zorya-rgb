@@ -69,7 +69,11 @@ class ZoryaDaemon:
     def status(self):
         with self.lock:
             state=self.store.snapshot()
-            state.update(connected=self.connected,error=self.error or self.store.error,
+            error=self.error or self.store.error
+            if error:
+                error=str(error)
+                while len(json.dumps(error).encode())>6000:error=error[:len(error)//2]
+            state.update(connected=self.connected,error=error,
                          setup=self.setup,device_count=len(self.device_cache),applying=self.applying,
                          missing_devices=sorted(set(state['devices'])-{d['id'] for d in self.device_cache}),
                          last_error=dict(self.last_error) if self.last_error else None,runtime_version=__version__)
