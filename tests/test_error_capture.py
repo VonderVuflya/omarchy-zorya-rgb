@@ -42,3 +42,13 @@ class ErrorCaptureTests(unittest.TestCase):
         self.assertIsNone(status['error'])
         self.assertIn('RuntimeError: USB worker fixture failure',status['last_error']['traceback'])
         self.assertIn('apply',status['last_error']['traceback'])
+
+    def test_large_unicode_error_does_not_overflow_status_protocol(self):
+        with tempfile.TemporaryDirectory() as folder:
+            daemon=ZoryaDaemon(store=StateStore(Path(folder)/'state.json'))
+            daemon._remember_error('🔥'*4000,'hardware','🔥'*16000)
+            import json
+            self.assertLess(len(json.dumps(daemon.status()).encode()),40000)
+            first=daemon.status()['last_error']['at']
+            daemon._remember_error('🔥'*4000,'hardware','🔥'*16000)
+            self.assertEqual(daemon.status()['last_error']['at'],first)

@@ -79,8 +79,13 @@ class ZoryaDaemon:
         if not message:return
         with self.lock:
             message=str(message)[:4000]
-            if self.last_error and self.last_error['message']==message and (not trace or self.last_error['traceback']==trace[-16000:]):return
-            self.last_error=dict(message=message,operation=operation,at=time.time(),traceback=trace[-16000:])
+            trace=trace[-16000:]
+            # IPC encodes non-ASCII characters as escapes. Bound the encoded
+            # evidence as well as character count, leaving room for saved state.
+            while len(json.dumps(message).encode())>6000:message=message[:len(message)//2]
+            while len(json.dumps(trace).encode())>24000:trace=trace[len(trace)//2:]
+            if self.last_error and self.last_error['message']==message and (not trace or self.last_error['traceback']==trace):return
+            self.last_error=dict(message=message,operation=operation,at=time.time(),traceback=trace)
 
     def dispatch(self,message):
         if not isinstance(message,dict): raise ValueError('Request must be an object')
