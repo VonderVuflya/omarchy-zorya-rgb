@@ -10,11 +10,20 @@ import socket
 import stat
 import threading
 import time
+import traceback
 from .state import StateStore
 from .openrgb_backend import OpenRGBBackend
+from . import __version__
 
 LOG=logging.getLogger(__name__)
 MAX_MESSAGE=128*1024
+
+
+def _bounded_error(error):
+    if not error:return error
+    error=str(error)
+    while len(json.dumps(error).encode())>6000:error=error[:len(error)//2]
+    return error
 
 
 def default_socket_path():
@@ -62,14 +71,29 @@ class ZoryaDaemon:
         self.setup={'daemon':True}; self.applying=True; self.listener=None; self.worker=None
         self.recovery_pending=False; self._next_recovery=0; self._recovery_deadline=0
         self._lock_file=None
+        self.last_error=None
 
     def status(self):
         with self.lock:
             state=self.store.snapshot()
-            state.update(connected=self.connected,error=self.error or self.store.error,
+            error=_bounded_error(self.error or self.store.error)
+            state.update(connected=self.connected,error=error,
                          setup=self.setup,device_count=len(self.device_cache),applying=self.applying,
-                         missing_devices=sorted(set(state['devices'])-{d['id'] for d in self.device_cache}))
+                         missing_devices=sorted(set(state['devices'])-{d['id'] for d in self.device_cache}),
+                         last_error=dict(self.last_error) if self.last_error else None,runtime_version=__version__)
             return state
+
+    def _remember_error(self,message,operation='hardware',trace=''):
+        if not message:return
+        with self.lock:
+            message=str(message)[:4000]
+            trace=trace[-16000:]
+            # IPC encodes non-ASCII characters as escapes. Bound the encoded
+            # evidence as well as character count, leaving room for saved state.
+            while len(json.dumps(message).encode())>6000:message=message[:len(message)//2]
+            while len(json.dumps(trace).encode())>24000:trace=trace[len(trace)//2:]
+            if self.last_error and self.last_error['message']==message and (not trace or self.last_error['traceback']==trace):return
+            self.last_error=dict(message=message,operation=operation,at=time.time(),traceback=trace)
 
     def dispatch(self,message):
         if not isinstance(message,dict): raise ValueError('Request must be an object')
@@ -79,7 +103,7 @@ class ZoryaDaemon:
             with self.lock:
                 selected=set(self.store.snapshot()['devices'])
                 devices=[dict(d,selected=d['id'] in selected) for d in self.device_cache]
-                return {'devices':devices,'error':self.error or self.store.error}
+                return {'devices':devices,'error':_bounded_error(self.error or self.store.error)}
         with self.lock:
             if command=='set': self.store.update(message.get('patch'))
             elif command=='preset_save': self.store.save_preset(message.get('name'))
@@ -182,6 +206,8 @@ class ZoryaDaemon:
                     self._cache()
             except Exception as exc:
                 with self.lock: self.error=str(exc); self.applying=False
+                self._remember_error(self.error,'hardware worker',traceback.format_exc(limit=12))
+            self._remember_error(self.error)
             self.wake.wait(interval); self.wake.clear()
         self.backend.close()
 

@@ -75,6 +75,14 @@ zorya-rgb preset save "Evening"
 
 Native device modes are used when compatible. Supported Lian Li wireless controllers run pulse from a smooth onboard frame loop with the updated bridge. Software fallback may run at up to 30 FPS for USB/HID devices; SMBus/RF/unknown devices retain a conservative two-FPS limit. Some devices do not offer every mode; unsupported operations are shown as device errors instead of silently pretending to succeed.
 
+## Updates and bug reports
+
+Zorya checks GitHub Releases when the widget loads and every six hours. A newer stable release shows an **↑** button. Open it to review the version, then choose **Install update**. UI and runtime update together from that exact release tag; source backups are retained and a failed runtime health check rolls back. Updates preserve lighting state and hardware configuration. Local git edits block replacement, and releases that change dependencies require explicit Setup instead.
+
+Errors remain available after a transient recovery. Select **Prepare issue report** to review a readable Markdown report containing versions, hardware models, kernel drivers, relevant service states and the error/traceback. Raw JSON Details have been removed. Device identities, credentials and user paths are filtered; review the content before sharing it publicly.
+
+With an authenticated GitHub CLI, **Create GitHub issue** submits the full reviewed report with one explicit click. Zorya never reads your token or publishes on error detection alone. **Open GitHub issue form** and **Copy full report** remain available without gh. Long browser drafts show a truncation notice: copy the full report before submitting. The full report is also useful as input to Codex for reproduction and a regression-tested fix through the normal OpenSpec/PR workflow.
+
 ## Remove
 
 ```sh

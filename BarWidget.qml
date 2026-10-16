@@ -4,7 +4,7 @@ import qs.Ui as Ui
 Ui.BarWidget {
     id: widget
     moduleName: "vondervuflya.zorya-rgb"
-    readonly property Panel panel: popup.item as Panel
+    readonly property var panel: popup.item
     readonly property bool opened: widget.panel ? widget.panel.opened : false
     readonly property bool popoutSwitchClosing: widget.panel ? widget.panel.popoutSwitchClosing : false
     function open() { if (widget.panel) widget.panel.open() }
@@ -32,8 +32,9 @@ Ui.BarWidget {
         id: button
         anchors.fill: parent
         bar: widget.bar
-        text: "\udb80\udd2b"
-        tooltipText: "ZoryaRGB"
+        text: widget.panel && widget.panel.backend.updateAvailable ? "↑" : "\udb80\udd2b"
+        tooltipText: widget.panel && widget.panel.backend.updateAvailable
+            ? "ZoryaRGB · Update to " + widget.panel.backend.updateInfo.latest_version : "ZoryaRGB"
         onPressed: function(mouseButton) { if (mouseButton === Qt.LeftButton) widget.togglePanel() }
     }
 }
