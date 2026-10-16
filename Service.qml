@@ -13,7 +13,7 @@ QtObject {
     property var diagnostics: null
     property string error: ""
     property bool active: false
-    readonly property bool busy: action.running || queue.length > 0 || Object.keys(pending).length > 0
+    readonly property bool busy: planLoading || setupRunning || action.running || queue.length > 0 || Object.keys(pending).length > 0
     property string operation: ""
     property var pending: ({})
     property var queue: []
@@ -22,6 +22,138 @@ QtObject {
     property string readKind: "status"
     property bool refreshRequested: false
     property bool pairSucceeded: false
+
+    // This state belongs to the service, so closing the panel never cancels setup.
+    property var setupPlan: null
+    property bool planLoading: false
+    property bool setupRunning: false
+    property bool setupSucceeded: false
+    property string setupError: ""
+    property string setupHint: ""
+    property string setupStage: ""
+    property string setupStepId: ""
+    property var setupQueue: []
+    property int setupCompleted: 0
+    property int setupTotal: 0
+    property int setupDeviceCount: 0
+    property string setupResponse: ""
+    property string setupStderr: ""
+    property bool startAfterPlan: false
+    property bool planRequested: false
+    property bool deferredPlan: false
+    property bool deferredPlanStart: false
+    property var reviewedActions: []
+    readonly property bool needsSetup: (setupPlan !== null ? setupPlan.ready !== true : !state.connected && setupError !== "") && !setupSucceeded
+    onActiveChanged: { if (active && !planRequested) requestPlan(false) }
+
+    function requestPlan(start) {
+        if (onboarding.running || setupRunning || planLoading) return
+        commitPending()
+        if (action.running || queue.length) {
+            deferredPlan = true
+            deferredPlanStart = start === true
+            return
+        }
+        reviewedActions = setupPlan && Array.isArray(setupPlan.steps) ? setupPlan.steps.filter(function(step) { return step.status === "needed" && step.id !== "verify" }) : []
+        startAfterPlan = start === true
+        planRequested = true
+        planLoading = true
+        setupResponse = ""
+        setupStderr = ""
+        onboarding.command = [executable, "onboarding", "plan"]
+        onboarding.running = true
+    }
+    function startSetup() { requestPlan(true) }
+    function nextSetupStep() {
+        if (!setupQueue.length) {
+            setupRunning = false
+            setupSucceeded = true
+            if (setupPlan) setupPlan = merged(setupPlan, {ready: true, summary: "Connection checked. Choose devices to control their lighting."})
+            setupStage = "Connection checked"
+            next()
+            refresh()
+            return
+        }
+        var jobs = setupQueue.slice(), step = jobs.shift()
+        setupQueue = jobs
+        setupStage = step.label
+        setupStepId = step.id
+        setupResponse = ""
+        setupStderr = ""
+        onboarding.command = [executable, "onboarding", "run", "--step", step.id]
+        onboarding.running = true
+    }
+    function finishOnboarding(code) {
+        var data = null
+        try { data = JSON.parse(setupResponse) } catch (exception) { /* Report below. */ }
+        var wasPlan = planLoading
+        planLoading = false
+        if (code !== 0 || !data || data.ok !== true || (!wasPlan && data.error)) {
+            setupRunning = false
+            setupSucceeded = false
+            setupError = data && data.error ? String(data.error) : setupStderr || "Setup returned an invalid response (exit " + code + ")."
+            setupHint = data && data.hint ? String(data.hint) : "Review the details, then retry to check which steps are still needed."
+            startAfterPlan = false
+            return
+        }
+        if (data.diagnostics) diagnostics = data.diagnostics
+        if (Array.isArray(data.devices)) {
+            devices = data.devices
+            setupDeviceCount = data.devices.length
+        }
+        if (wasPlan) {
+            setupPlan = data
+            if (data.ready !== true) setupSucceeded = false
+            if (data.error) {
+                setupError = String(data.error)
+                setupHint = data.hint ? String(data.hint) : "Resolve the blocked steps, then check again."
+                startAfterPlan = false
+                return
+            }
+            if (!startAfterPlan) return
+            startAfterPlan = false
+            var steps = Array.isArray(data.steps) ? data.steps : []
+            var blocked = steps.filter(function(step) { return step.required && step.status === "blocked" })
+            if (blocked.length) {
+                setupError = blocked.map(function(step) { return step.label + ": " + step.description }).join("\n")
+                setupHint = "Resolve the blocked steps, then retry."
+                return
+            }
+            var changed = steps.some(function(step) {
+                if (step.status !== "needed" || step.id === "verify") return false
+                return !reviewedActions.some(function(reviewed) {
+                    return reviewed.id === step.id && reviewed.description === step.description && reviewed.required === step.required
+                })
+            })
+            if (changed) {
+                setupError = "The setup plan changed. Review the updated steps before starting."
+                setupHint = "Click Start setup again after reviewing the actions above."
+                return
+            }
+            setupError = ""
+            setupHint = ""
+            setupSucceeded = false
+            // Always verify independently after the currently needed steps.
+            setupQueue = steps.filter(function(step) { return step.status === "needed" && step.id !== "verify" })
+            setupQueue.push({id: "verify", label: "Checking connection and devices"})
+            setupCompleted = 0
+            setupTotal = setupQueue.length
+            setupRunning = true
+        } else {
+            setupCompleted++
+            if (setupPlan && Array.isArray(setupPlan.steps)) {
+                setupPlan = merged(setupPlan, {steps: setupPlan.steps.map(function(step) {
+                    return step.id === setupStepId ? merged(step, {status: "ready"}) : step
+                })})
+            }
+        }
+        Qt.callLater(nextSetupStep)
+    }
+    property Process onboarding: Process {
+        stdout: StdioCollector { onStreamFinished: service.setupResponse = text }
+        stderr: StdioCollector { onStreamFinished: service.setupStderr = text.trim().slice(0, 1500) }
+        onExited: function(code) { Qt.callLater(function() { service.finishOnboarding(code); if (!service.setupRunning) service.next() }) }
+    }
 
     function merged(base, patch) {
         var result = ({})
@@ -58,7 +190,15 @@ QtObject {
         enqueue(args, kind || args[0])
     }
     function next() {
-        if (action.running || !queue.length) return
+        if (action.running || setupRunning || planLoading) return
+        if (!queue.length) {
+            if (deferredPlan) {
+                var start = deferredPlanStart
+                deferredPlan = false
+                requestPlan(start)
+            }
+            return
+        }
         var jobs = queue.slice(), job = jobs.shift()
         queue = jobs
         operation = job.kind
@@ -127,5 +267,5 @@ QtObject {
             } else if (service.refreshRequested) Qt.callLater(service.refresh)
         }
     }
-    Component.onCompleted: refresh()
+    Component.onCompleted: { refresh(); if (active && !planRequested) requestPlan(false) }
 }

@@ -35,6 +35,9 @@ Ui.Panel {
     readonly property var unboundWireless: root.backend.diagnostics && Array.isArray(root.backend.diagnostics.wireless_devices)
         ? root.backend.diagnostics.wireless_devices.filter(function(device) { return device.is_unbound_wireless === true }) : []
     property int page: 0
+    property bool setupDetails: false
+    property bool setupAdvanced: false
+    property string manualComponent: ""
 
     function open() { root.controller.show(); root.backend.refresh() }
     function close() { root.controller.hide() }
@@ -60,7 +63,6 @@ Ui.Panel {
         var preset = root.presets[presetPicker.currentIndex]
         if (preset) root.backend.command(["preset", verb, String(preset.id)])
     }
-    function setup(component) { root.backend.command(["setup", "--component", component], "setup") }
 
     component RoundedButton: Button {
         id: buttonControl
@@ -226,6 +228,12 @@ Ui.Panel {
                         wrapMode: Text.Wrap
                         font.pixelSize: 12
                     }
+                }
+                RowLayout {
+                    visible: root.backend.needsSetup && root.page !== 2
+                    Layout.fillWidth: true
+                    Label { text: "First time here? Review connection setup."; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12 }
+                    RoundedButton { text: "Open Setup"; onClicked: root.page = 2 }
                 }
                 TabBar {
                     spacing: 4
@@ -447,9 +455,66 @@ Ui.Panel {
                             visible: root.page === 2
                             Layout.fillWidth: true
                             spacing: 12
-                            Label { text: "HARDWARE & CONNECTION"; font.letterSpacing: 2; font.pixelSize: 11; opacity: 0.65 }
-                            Label { text: "Inspect the connection before installing a component. Setup may ask for system authorization and a source build can take several minutes."; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12 }
-                            RoundedButton { text: "Run diagnostics"; enabled: !root.backend.busy; onClicked: root.backend.command(["doctor"], "doctor") }
+                            Label { text: "SET UP ZORYA"; font.letterSpacing: 2; font.pixelSize: 11; opacity: 0.65 }
+                            Label {
+                                text: root.backend.planLoading ? "Checking what this computer needs…"
+                                    : root.backend.setupPlan ? root.backend.setupPlan.summary : "Review the connection before making changes."
+                                Layout.fillWidth: true; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                            }
+                            Label {
+                                text: "Setup installs only needed components. Package downloads, source builds and USB access rules may require system authorization and take several minutes. Lighting selection and wireless pairing remain your choice."
+                                Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12; opacity: 0.75
+                            }
+                            Repeater {
+                                model: root.backend.setupPlan && Array.isArray(root.backend.setupPlan.steps) ? root.backend.setupPlan.steps : []
+                                ColumnLayout {
+                                    id: setupStep
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    spacing: 3
+                                    Label { text: setupStep.modelData.label + " · " + setupStep.modelData.status; font.bold: true; textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                                    Label { text: setupStep.modelData.description; textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11; opacity: 0.7 }
+                                }
+                            }
+                            Label {
+                                visible: root.backend.setupRunning
+                                text: root.backend.setupStage + " · step " + Math.min(root.backend.setupCompleted + 1, root.backend.setupTotal) + " of " + root.backend.setupTotal + "\nYou can close this panel; setup will continue."
+                                Layout.fillWidth: true; wrapMode: Text.Wrap
+                            }
+                            ProgressBar {
+                                visible: root.backend.setupRunning
+                                Layout.fillWidth: true
+                                from: 0; to: Math.max(1, root.backend.setupTotal); value: root.backend.setupCompleted
+                            }
+                            Label {
+                                visible: root.backend.setupError !== ""
+                                text: root.backend.setupError + (root.backend.setupHint ? "\n" + root.backend.setupHint : "")
+                                textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap
+                            }
+                            RowLayout {
+                                RoundedButton {
+                                    text: root.backend.setupError ? "Retry setup" : "Start setup"
+                                    enabled: !root.backend.busy && !root.backend.planLoading && (root.backend.setupPlan !== null || root.backend.setupError !== "")
+                                    onClicked: root.backend.startSetup()
+                                }
+                                RoundedButton { text: "Check again"; enabled: !root.backend.busy && !root.backend.planLoading; onClicked: root.backend.requestPlan(false) }
+                            }
+                            ColumnLayout {
+                                visible: root.backend.setupSucceeded
+                                Layout.fillWidth: true
+                                Label { text: "Connection checked · " + root.backend.setupDeviceCount + " devices found"; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                                Label { text: "Choose devices, then apply a color to check their lighting."; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12 }
+                                RowLayout {
+                                    RoundedButton { text: "Choose devices"; onClicked: root.page = 1 }
+                                    RoundedButton {
+                                        text: "Apply chosen color"
+                                        enabled: root.selectedIds.length > 0 && !root.backend.busy
+                                        onClicked: root.backend.command(["restore"], "restore")
+                                    }
+                                }
+                            }
+                            RoundedButton { text: root.setupAdvanced ? "Hide advanced tools" : "Advanced tools"; onClicked: root.setupAdvanced = !root.setupAdvanced }
+                            RoundedButton { visible: root.setupAdvanced; text: "Run diagnostics"; enabled: !root.backend.busy; onClicked: root.backend.command(["doctor"], "doctor") }
                             Label {
                                 visible: root.unboundWireless.length > 0
                                 text: "UNPAIRED WIRELESS DEVICES"
@@ -481,34 +546,38 @@ Ui.Panel {
                                 Layout.fillWidth: true; wrapMode: Text.Wrap
                             }
                             Repeater {
-                                model: [{id: "openrgb", label: "OpenRGB"}, {id: "lianli", label: "Lian Li wireless RGB"}, {id: "kingston", label: "Kingston DDR5 detection"}]
-                                RowLayout {
-                                    id: componentRow
+                                model: [{id: "openrgb", label: "OpenRGB"}, {id: "kingston", label: "Kingston DDR5 compatibility"}]
+                                RoundedButton {
+                                    id: manualSetup
                                     required property var modelData
-                                    Layout.fillWidth: true
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        Label { text: componentRow.modelData.label }
-                                        Label {
-                                            text: {
-                                                var components = root.backend.diagnostics && root.backend.diagnostics.components ? root.backend.diagnostics.components : root.backend.state.setup
-                                                var component = components ? components[componentRow.modelData.id] : null
-                                                return component ? (component.available ? "Available" : "Setup required") : "Run diagnostics to check"
-                                            }
-                                            opacity: 0.6; font.pixelSize: 11
-                                        }
-                                    }
-                                    RoundedButton { text: "Set up"; enabled: !root.backend.busy; onClicked: root.setup(componentRow.modelData.id) }
+                                    visible: root.setupAdvanced
+                                    text: "Review " + manualSetup.modelData.label + " setup"
+                                    onClicked: root.manualComponent = root.manualComponent === manualSetup.modelData.id ? "" : manualSetup.modelData.id
                                 }
                             }
-                            RowLayout {
-                                RoundedButton { text: "Set up all components"; enabled: !root.backend.busy; onClicked: root.setup("all") }
-                                RoundedButton { text: "Restore lighting"; enabled: !root.backend.busy; onClicked: root.backend.command(["restore"]) }
+                            ColumnLayout {
+                                visible: root.setupAdvanced && root.manualComponent !== ""
+                                Layout.fillWidth: true
+                                Label {
+                                    text: root.manualComponent === "kingston"
+                                        ? "Optional Kingston DDR5 support installs a patched OpenRGB source build and may require package authorization. This can replace the active OpenRGB service. It does not write SPD EEPROM. Use only if standard discovery misses your memory."
+                                        : "Optional OpenRGB setup installs OpenRGB, required build packages, USB access rules and a user service. It may ask for system authorization. Use this to add OpenRGB devices to a working Lian Li installation."
+                                    Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
+                                }
+                                RoundedButton {
+                                    text: root.manualComponent === "kingston" ? "Install Kingston compatibility" : "Install OpenRGB"
+                                    enabled: !root.backend.busy && !root.backend.planLoading
+                                    onClicked: {
+                                        var component = root.manualComponent
+                                        root.manualComponent = ""
+                                        root.backend.command(["setup", "--component", component], "setup")
+                                    }
+                                }
                             }
-                            Label { visible: root.backend.operation === "setup" && root.backend.busy; text: "Setup is running. Keep this panel open to see the result."; Layout.fillWidth: true; wrapMode: Text.Wrap }
-                            Label { visible: root.backend.diagnostics !== null; text: "DETAILS"; font.pixelSize: 11; opacity: 0.65; font.letterSpacing: 2 }
+                            RoundedButton { visible: root.setupAdvanced; text: "Restore lighting"; enabled: !root.backend.busy; onClicked: root.backend.command(["restore"]) }
+                            RoundedButton { text: root.setupDetails ? "Hide details" : "Show details"; onClicked: root.setupDetails = !root.setupDetails }
                             TextArea {
-                                visible: root.backend.diagnostics !== null
+                                visible: root.setupDetails && root.backend.diagnostics !== null
                                 Layout.fillWidth: true
                                 readOnly: true
                                 selectByMouse: true
