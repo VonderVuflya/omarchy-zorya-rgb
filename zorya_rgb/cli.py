@@ -16,6 +16,9 @@ def parser():
     commands=root.add_subparsers(dest='command',required=True)
     for name in ('status','devices','doctor','install','uninstall','daemon','restore','migrate'):
         commands.add_parser(name)
+    onboarding=commands.add_parser('onboarding').add_subparsers(dest='action',required=True)
+    onboarding.add_parser('plan')
+    onboarding.add_parser('run').add_argument('--step',required=True)
     pairing=commands.add_parser('pair'); pairing.add_argument('--device',required=True)
     settings=commands.add_parser('set'); settings.add_argument('--json',required=True,dest='patch')
     presets=commands.add_parser('preset').add_subparsers(dest='action',required=True)
@@ -30,6 +33,9 @@ def parser():
 
 def execute(args,rpc=request,store=None):
     command=args.command
+    if command=='onboarding':
+        from . import onboarding
+        return onboarding.plan() if args.action=='plan' else onboarding.run_step(args.step)
     if command=='pair':
         if not args.device.strip() or len(args.device)>256:
             raise ValueError('device must be a nonempty ID of at most 256 characters')

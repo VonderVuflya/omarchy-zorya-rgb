@@ -23,7 +23,11 @@ Zorya runs inside the existing Omarchy shell. Hardware tools run as separate use
 omarchy plugin add https://github.com/VonderVuflya/omarchy-zorya-rgb.git --enable
 ```
 
-Open **ZoryaRGB → Setup → Install Zorya runtime**. Alternatively, from a checkout:
+Open **ZoryaRGB → Setup**. The panel checks what is ready without changing your system. Review the required steps, then select **Start setup** to prepare the private runtime and supported hardware services. Setup may request system authorization for packages or USB/I2C permissions; builds can take several minutes. It keeps working when you close the panel. If a step fails, its error remains visible and **Retry setup** checks which stages are still needed.
+
+After connection verification, open **Choose devices**, select the targets you want, and explicitly apply your chosen color to check the lighting. Discovery alone does not prove that every physical LED responds.
+
+Alternatively, install from a checkout:
 
 ```sh
 ./bin/zorya-rgb install
@@ -39,9 +43,10 @@ zorya-rgb migrate
 
 ## Hardware setup
 
-Use **Setup → Diagnose** first. Existing working OpenRGB/Lian Li executables can be adopted instead of rebuilt. Hardware setup is explicit:
+The guided Setup reuses working local SDK services without replacing or restarting them. Detailed diagnostics, pairing and optional Kingston compatibility setup are available under **Advanced tools**. The existing CLI remains available for explicit component setup:
 
 ```sh
+zorya-rgb onboarding plan
 zorya-rgb doctor
 zorya-rgb setup --component all --dry-run
 zorya-rgb setup --component openrgb

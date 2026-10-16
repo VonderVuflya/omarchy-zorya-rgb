@@ -1,7 +1,14 @@
-#!/usr/bin/env python3
-"""Portable checkout launcher; installed environments use the console entrypoint."""
-from pathlib import Path
-import sys
-sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from zorya_rgb.cli import main
-sys.exit(main())
+#!/bin/sh
+# Marketplace checkouts can diagnose/bootstrap with system Python before the
+# private runtime exists. Once installed, use its pinned optional SDK.
+source_root=$(CDPATH= cd -- "${0%/*}/.." && pwd) || exit 1
+runtime="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-zorya-rgb/venv/bin/python"
+if [ -x "$runtime" ]; then
+    python="$runtime"
+elif command -v python3 >/dev/null 2>&1; then
+    python=python3
+else
+    printf '%s\n' '{"ok":false,"error":"Python 3.11 or newer is required to prepare ZoryaRGB.","hint":"Install your distribution Python package, then reopen Setup."}'
+    exit 1
+fi
+exec "$python" -c 'import sys; sys.path.insert(0,sys.argv.pop(1)); from zorya_rgb.cli import main; sys.exit(main())' "$source_root" "$@"
