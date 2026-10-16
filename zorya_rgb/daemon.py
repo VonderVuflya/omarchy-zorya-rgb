@@ -130,7 +130,10 @@ class ZoryaDaemon:
         if now < self._next_recovery: return False
         self._next_recovery=now+5
         # Retry only SDK discovery. Do not repeatedly restart hardware services.
-        ready=self._ready()
+        try: ready=self._ready()
+        except Exception as exc:
+            LOG.warning("RGB recovery discovery failed (%s); retaining the bounded wait",type(exc).__name__)
+            ready=False
         if not ready and now < self._recovery_deadline: return False
         if ready:
             LOG.info("RGB recovery discovery complete; applying saved settings")

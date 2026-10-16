@@ -51,7 +51,7 @@ zorya-rgb setup --component kingston
 
 Fresh hardware builds use pinned upstream commits and bundled compatibility patches. Setup may need a polkit password to install build dependencies or narrowly scoped USB/I2C access rules. Downloads and compilation can take several minutes. Linux/Omarchy on Arch is the primary target; dependencies and exact hardware availability are reported before an operation.
 
-The Lian Li adapter defaults to RGB control. It does not set pump speeds, fan curves or LCD media. When adopting an existing cooling service, its configuration is retained. Unbound devices appear in Setup with an explicit **Pair** action. Pairing is never performed by status polling.
+The Lian Li adapter defaults to RGB control. It does not set pump speeds, fan curves or LCD media. Existing RGB-only services can be adopted. Setup refuses to replace a full-mode cooling/LCD service, including an older Zorya-managed service, before changing configuration or units. Configure a separate RGB-only bridge explicitly to use it alongside existing cooling control. Unbound devices appear in Setup with an explicit **Pair** action. Pairing is never performed by status polling.
 
 See [hardware support](docs/hardware.md) and [lifecycle and permissions](docs/lifecycle.md).
 

@@ -263,11 +263,11 @@ class ResumeCoordinationTests(unittest.TestCase):
     def test_listening_sdk_with_zero_controllers_is_not_ready(self):
         from unittest.mock import patch
         from types import SimpleNamespace
-        import sys
         closed=[]
         client=SimpleNamespace(devices=[],update=lambda:None,disconnect=lambda:closed.append(True))
-        with patch.dict(sys.modules,{'openrgb':SimpleNamespace(OpenRGBClient=lambda **kw:client)}):
+        with patch('zorya_rgb.sdk_transport.connect_client',return_value=client) as connect:
             self.assertFalse(setup._sdk_ready(6742))
+        connect.assert_called_once_with(address='127.0.0.1',port=6742,name='Zorya recovery',protocol_version=None)
         self.assertEqual(closed,[True])
 
     def test_partial_scan_is_redetected_once_when_selected_devices_are_missing(self):

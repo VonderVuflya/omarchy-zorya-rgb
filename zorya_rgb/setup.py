@@ -132,8 +132,8 @@ def recovery(*,services=None,run=subprocess.run,readiness=None,timeout=60,probe=
 
 def _sdk_ready(port):
     try:
-        from openrgb import OpenRGBClient
-        client=OpenRGBClient(address='127.0.0.1',port=port,name='Zorya recovery',protocol_version=1 if port==6743 else None)
+        from .sdk_transport import connect_client
+        client=connect_client(address='127.0.0.1',port=port,name='Zorya recovery',protocol_version=1 if port==6743 else None)
         try:
             client.update()
             return bool(client.devices)  # A listening server with an empty early scan is not ready.

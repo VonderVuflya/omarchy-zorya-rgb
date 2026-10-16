@@ -187,11 +187,28 @@ def privileged_rules(component,root):
         execute(['pkexec','udevadm','trigger','--subsystem-match=i2c-dev','--action=change'],timeout=120)
 
 
+
+def rgb_only_service(service):
+    """Recognize explicit RGB-only mode or our existing RGB-only shell wrapper."""
+    if '--rgb-only' in service.get('argv',[]):return True
+    executable=Path(service.get('executable',''))
+    if not executable.name.endswith('-rgb'):return False
+    try:
+        with executable.open(encoding='utf-8') as stream:text=stream.read(8192)
+    except (OSError,UnicodeError):return False
+    return re.search(r'(?m)^\s*exec[^\n]*\s--rgb-only(?:\s|$)',text) is not None
+
 def setup(component,data,adopt_only=False):
     if sys.platform!='linux':raise RuntimeError('Hardware setup requires Linux with systemd user services')
     report=hardware.doctor()
     chosen=['openrgb','lianli'] if component=='all' else ['openrgb' if component=='kingston' else component]
     if component=='all' and not report['components']['lianli']['detected']:chosen.remove('lianli')
+    if 'lianli' in chosen:
+        # A full-mode bridge can control cooling/LCDs. Never silently replace
+        # it with our RGB-only wrapper or enable its all-interface SDK listener.
+        for service in report['services']:
+            if service['available'] and 'lianli' in Path(service['executable']).name.lower() and not rgb_only_service(service):
+                raise RuntimeError('Cannot adopt a full-mode Lian Li service: existing cooling/LCD control is preserved. Configure a separate RGB-only bridge explicitly before retrying setup.')
     cfg=hardware.config_dir();cfg.mkdir(parents=True,exist_ok=True)
     units=Path(os.environ.get('XDG_CONFIG_HOME',Path.home()/'.config'))/'systemd/user'
     data.mkdir(parents=True,exist_ok=True)

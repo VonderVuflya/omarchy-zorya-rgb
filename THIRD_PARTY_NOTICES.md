@@ -1,7 +1,7 @@
 # Third-party notices
 
 - **OpenRGB** — CalcProgrammer1 and contributors, GPL-2.0-or-later. The Kingston SPD detection compatibility patch is derived from official upstream source. Original copyright headers and the GPL license are retained in the patches directory. The setup builder downloads source at a pinned commit and produces a private user binary.
-- **openrgb-python** — upstream contributors, GPLv3. Installed into the private Python environment as a separate package.
+- **openrgb-python** — upstream contributors, GPLv3. Installed into the private Python environment as a separate package. The bounded transport adapter in `zorya_rgb/sdk_transport.py` derives its client initializer and response handling from version 0.3.6; distributed under GPL-3.0-or-later with this project.
 - **lian-li-linux** — sgtaziz and contributors, MIT. Bundled RGB/resume compatibility patches retain the upstream license. The setup builder downloads a pinned source revision.
 - **FFmpeg** — upstream contributors, primarily LGPL-2.1-or-later for the minimal build used here. No GPL/nonfree codec configuration is enabled by Zorya's RGB-only dependency builder.
 - **EVDI** — DisplayLink and contributors; the setup uses the pinned upstream userspace library and retains upstream license files. The builder does not install the kernel module.

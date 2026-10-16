@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from .effects import frame, rgb
+from .sdk_transport import validate_mode_colors
 
 HAS_SPEED=1; HAS_BRIGHTNESS=16; PER_LED=32; MODE_COLORS=64; MANUAL_SAVE=256
 
@@ -54,10 +55,10 @@ class OpenRGBBackend:
         factory=self.client_factory
         try:
             if factory is None:
-                from openrgb import OpenRGBClient
+                from .sdk_transport import connect_client
                 from openrgb.utils import RGBColor
                 self.color_factory=RGBColor
-                factory=lambda address,port:OpenRGBClient(address=address,port=port,name='ZoryaRGB',protocol_version=1 if port==6743 else None)
+                factory=lambda address,port:connect_client(address=address,port=port,name='ZoryaRGB',protocol_version=1 if port==6743 else None)
             self._factory=factory
             for host,port in self.endpoints:
                 try:
@@ -165,6 +166,7 @@ class OpenRGBBackend:
     def _prepare(self,device,state):
         original,native=self._pick_mode(device,state)
         mode=normalize_mode(original)
+        validate_mode_colors(mode)
         if int(mode.flags)&HAS_BRIGHTNESS:
             low=mode.brightness_min; high=mode.brightness_max
             mode.brightness=round(low+(high-low)*state['brightness']/100) if native else high

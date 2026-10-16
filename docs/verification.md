@@ -30,3 +30,9 @@ Version 0.1.1: 82 tests passed with the real SDK installed; both OpenSpec change
 ## Partial discovery recovery, version 0.1.5
 
 A real2026-10-16 resume left the SDK with USB devices but neither RAM nor GPU. Both I2C nodes were accessible to the user at diagnosis; one later owned OpenRGB restart restored the seven-controller inventory and cleared both missing IDs without altering selection. The automatic coordinator now retries a partially populated selected inventory once, sharing its budget with the existing empty-scan retry.98 Python tests, all OpenSpec changes, QML and the installed manifest validated. Another physical suspend with this update remains to be observed.
+
+## Bounded SDK transport, version 0.1.6
+
+On 2026-10-16, 124 Python tests passed with pinned openrgb-python 0.3.6, including 23 transport tests. A bounded subprocess reproduced the upstream EOF hang; the adapter rejects the same truncated response and permits a subsequent valid connection. Coverage includes startup/later reads, fragmented packets, slow streams, nested notifications, oversized allocation fields and total discovery/update deadlines. Council regressions cover discovery exceptions after the resume deadline and rejection of both external and older managed full-mode Lian Li services before mutations. Independent final review found no remaining blockers in the reviewed scope.
+
+All six OpenSpec changes passed strict validation; QML, Python compilation and whitespace checks passed. Read-only connections to the reference PC's actual protocol-4 OpenRGB and protocol-1 Lian Li endpoints returned five and two controllers respectively and completed subsequent updates. This is not proof of peer authentication: loopback SDK ports remain unauthenticated. No new physical suspend or clean hardware build was performed for this change.
