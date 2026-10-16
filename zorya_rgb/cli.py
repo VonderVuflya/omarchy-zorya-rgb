@@ -19,6 +19,15 @@ def parser():
     onboarding=commands.add_parser('onboarding').add_subparsers(dest='action',required=True)
     onboarding.add_parser('plan')
     onboarding.add_parser('run').add_argument('--step',required=True)
+    updates=commands.add_parser('updates').add_subparsers(dest='action',required=True)
+    updates.add_parser('check').add_argument('--force',action='store_true')
+    updates.add_parser('apply').add_argument('--tag',required=True)
+    support=commands.add_parser('support').add_subparsers(dest='action',required=True)
+    report=support.add_parser('report')
+    report.add_argument('--error',default='')
+    report.add_argument('--operation',default='')
+    support.add_parser('copy')
+    support.add_parser('submit').add_argument('--fingerprint',required=True)
     pairing=commands.add_parser('pair'); pairing.add_argument('--device',required=True)
     settings=commands.add_parser('set'); settings.add_argument('--json',required=True,dest='patch')
     presets=commands.add_parser('preset').add_subparsers(dest='action',required=True)
@@ -33,6 +42,14 @@ def parser():
 
 def execute(args,rpc=request,store=None):
     command=args.command
+    if command=='updates':
+        from . import updates
+        return updates.check(force=args.force) if args.action=='check' else updates.apply(args.tag)
+    if command=='support':
+        from . import support
+        if args.action=='report':return support.build_report(error=args.error,operation=args.operation)
+        if args.action=='submit':return support.submit_report(args.fingerprint)
+        return support.copy_report()
     if command=='onboarding':
         from . import onboarding
         return onboarding.plan() if args.action=='plan' else onboarding.run_step(args.step)

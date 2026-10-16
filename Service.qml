@@ -7,13 +7,37 @@ import Quickshell.Io
 
 QtObject {
     id: service
-    readonly property string executable: String(Qt.resolvedUrl("bin/zorya-rgb")).replace(/^file:\/\//, "")
+    property string executable: String(Qt.resolvedUrl("bin/zorya-rgb")).replace(/^file:\/\//, "")
     property var state: ({on: true, color: "#FFFFFF", brightness: 100, effect: "static", speed: 1, secondary_color: "#8A6CFF", devices: [], presets: [], connected: false})
     property var devices: []
     property var diagnostics: null
     property string error: ""
+    property string lastError: ""
+    property string lastErrorOperation: ""
+    property string lastBackendErrorAt: ""
+    property var observedReadErrors: ({})
+    property double lastErrorTime: 0
+    property bool actionInFlight: false
+    property bool updateReloadRequired: false
+    property string updateMessage: ""
+    property var updateInfo: null
+    property bool updateChecked: false
+    property bool updateChecking: false
+    property string updateError: ""
+    readonly property bool updateAvailable: updateInfo !== null && updateInfo.update_available === true
+    readonly property bool updateInstalling: ((action.running || actionInFlight) && operation === "update") || updateReloadRequired || pluginReload.running || queue.some(function(job) { return job.kind === "update" })
+    property string updateResponse: ""
+    property string updateStderr: ""
+    property bool reportBusy: false
+    property string reportError: ""
+    property string supportMessage: ""
+    property var supportReport: null
+    property string createdIssueUrl: ""
+    property string reportResponse: ""
+    property string reportStderr: ""
+    property string reportOperation: ""
     property bool active: false
-    readonly property bool busy: planLoading || setupRunning || action.running || queue.length > 0 || Object.keys(pending).length > 0
+    readonly property bool busy: planLoading || setupRunning || action.running || actionInFlight || queue.length > 0 || Object.keys(pending).length > 0
     property string operation: ""
     property var pending: ({})
     property var queue: []
@@ -44,12 +68,105 @@ QtObject {
     property bool deferredPlanStart: false
     property var reviewedActions: []
     readonly property bool needsSetup: (setupPlan !== null ? setupPlan.ready !== true : !state.connected && setupError !== "") && !setupSucceeded
-    onActiveChanged: { if (active && !planRequested) requestPlan(false) }
+    onActiveChanged: {
+        if (active && !planRequested) requestPlan(false)
+        if (active && !updateChecked) checkUpdates(false)
+    }
+    onSetupErrorChanged: { if (setupError) captureError(setupError, "setup" + (setupStepId ? ": " + setupStepId : "")) }
+    function captureError(message, context, timestamp) {
+        var at = timestamp === undefined ? Date.now() : Number(timestamp) * 1000
+        if (!message || (timestamp !== undefined && (!isFinite(at) ? lastErrorTime > 0 : at < lastErrorTime))) return
+        lastErrorTime = isFinite(at) ? at : Date.now()
+        lastError = String(message)
+        lastErrorOperation = context || "backend"
+    }
+    function checkUpdates(force) {
+        if (updateChecking || updateInstalling) return
+        updateChecked = true
+        updateChecking = true
+        updateError = ""
+        updateResponse = ""
+        updateStderr = ""
+        updateCheck.command = [executable, "updates", "check"].concat(force ? ["--force"] : [])
+        updateCheck.running = true
+    }
+    function installUpdate() {
+        if (!updateAvailable || updateInstalling || reportBusy || !updateInfo.tag) return
+        command(["updates", "apply", "--tag", String(updateInfo.tag)], "update")
+    }
+    function prepareReport() {
+        if (reportBusy || updateInstalling) return
+        supportReport = null
+        createdIssueUrl = ""
+        supportMessage = ""
+        runSupport(["support", "report", "--error=" + lastError, "--operation=" + lastErrorOperation], "report")
+    }
+    function copyReport() {
+        if (!reportBusy && !updateInstalling && supportReport) runSupport(["support", "copy"], "copy")
+    }
+    function submitReport() {
+        if (reportBusy || updateInstalling || createdIssueUrl || !supportReport || supportReport.submit_available !== true || !supportReport.fingerprint) return
+        runSupport(["support", "submit", "--fingerprint", String(supportReport.fingerprint)], "submit")
+    }
+    function retrySupport() {
+        if (reportOperation === "submit") submitReport()
+        else if (reportOperation === "copy") copyReport()
+        else prepareReport()
+    }
+    function runSupport(args, kind) {
+        reportBusy = true
+        reportError = ""
+        reportResponse = ""
+        reportStderr = ""
+        reportOperation = kind
+        support.command = [executable].concat(args)
+        support.running = true
+    }
+    property Process updateCheck: Process {
+        stdout: StdioCollector { onStreamFinished: service.updateResponse = text }
+        stderr: StdioCollector { onStreamFinished: service.updateStderr = text.trim().slice(0, 500) }
+        onExited: function(code) {
+            Qt.callLater(function() {
+                var data = null
+                try { data = JSON.parse(service.updateResponse) } catch (exception) { /* Report below. */ }
+                service.updateChecking = false
+                if (code !== 0 || !data || data.ok !== true) {
+                    service.updateError = data && data.error ? String(data.error) : service.updateStderr || "Could not check GitHub releases. Try again."
+                    service.captureError(service.updateError, "updates check")
+                } else service.updateInfo = data
+            })
+        }
+    }
+    property Process pluginReload: Process {
+        command: ["omarchy-shell", "shell", "rescanPlugins"]
+        onExited: function(code) {
+            service.updateReloadRequired = false
+            if (code !== 0) service.updateMessage = "Update installed. Close and reopen ZoryaRGB to load the new version."
+        }
+    }
+    property Process support: Process {
+        stdout: StdioCollector { onStreamFinished: service.reportResponse = text }
+        stderr: StdioCollector { onStreamFinished: service.reportStderr = text.trim().slice(0, 500) }
+        onExited: function(code) {
+            Qt.callLater(function() {
+                var data = null
+                try { data = JSON.parse(service.reportResponse) } catch (exception) { /* Report below. */ }
+                service.reportBusy = false
+                if (code !== 0 || !data || data.ok !== true || (service.reportOperation === "report" && (!data.body || !data.issue_url)) || (service.reportOperation === "submit" && !data.issue_url)) {
+                    service.reportError = data && data.error ? String(data.error) : service.reportStderr || (service.reportOperation === "submit" ? "Could not create the GitHub issue. Retry or open the browser form." : "Could not prepare the diagnostic report. Retry.")
+                } else if (service.reportOperation === "report") service.supportReport = data
+                else if (service.reportOperation === "submit") {
+                    service.createdIssueUrl = String(data.issue_url)
+                    service.supportMessage = (data.already_submitted === true || data.reused === true) ? "This report already has a GitHub issue." : "GitHub issue created with the full diagnostic report."
+                } else service.supportMessage = "Full diagnostic report copied."
+            })
+        }
+    }
 
     function requestPlan(start) {
-        if (onboarding.running || setupRunning || planLoading) return
+        if (onboarding.running || setupRunning || planLoading || updateInstalling) return
         commitPending()
-        if (action.running || queue.length) {
+        if (action.running || actionInFlight || queue.length) {
             deferredPlan = true
             deferredPlanStart = start === true
             return
@@ -162,6 +279,7 @@ QtObject {
         return result
     }
     function update(patch) {
+        if (updateInstalling) return
         revision++
         state = merged(state, patch)
         pending = merged(pending, patch)
@@ -186,11 +304,13 @@ QtObject {
         next()
     }
     function command(args, kind) {
+        if (updateInstalling) return
         commitPending()
         enqueue(args, kind || args[0])
     }
     function next() {
-        if (action.running || setupRunning || planLoading) return
+        if (action.running || actionInFlight || setupRunning || planLoading) return
+        if (queue.length && queue[0].kind === "update" && read.running) return
         if (!queue.length) {
             if (deferredPlan) {
                 var start = deferredPlanStart
@@ -203,12 +323,15 @@ QtObject {
         queue = jobs
         operation = job.kind
         pairSucceeded = false
+        error = ""
+        if (operation === "update") { updateReloadRequired = false; updateMessage = "" }
+        actionInFlight = true
         action.command = [executable].concat(job.args)
         action.running = true
     }
-    function parse(text) {
+    function parse(text, context) {
         try { return JSON.parse(text) }
-        catch (exception) { error = "Zorya returned an invalid response. " + String(text).slice(0, 180); return null }
+        catch (exception) { error = "Zorya returned an invalid response."; captureError(error, context || "backend"); return null }
     }
     function refresh() {
         if (read.running || busy) { refreshRequested = true; return }
@@ -219,33 +342,52 @@ QtObject {
         read.running = true
     }
     function acceptAction(text) {
-        var data = parse(text)
+        var data = parse(text, operation)
         if (!data) return
         if (operation === "doctor" || operation === "setup") diagnostics = data
         if (operation === "pair") pairSucceeded = data.ok === true && !data.error
         error = data.error ? String(data.error) : ""
+        if (data.ok === false && !error) error = "Could not complete " + operation + "."
+        if (error) captureError(error, operation)
+        if (operation === "update" && data.ok === true) {
+            updateInfo = merged(updateInfo || {}, {update_available: false})
+            updateReloadRequired = data.reload_required === true
+            updateMessage = "Update installed."
+        }
     }
     function acceptRead(text) {
         if (readRevision !== revision || busy) return
-        var data = parse(text)
+        var data = parse(text, readKind)
         if (!data) return
         if (readKind === "status") {
             state = merged(state, data)
+            if (data.last_error && data.last_error.message && String(data.last_error.at) !== lastBackendErrorAt) {
+                lastBackendErrorAt = String(data.last_error.at)
+                captureError(data.last_error.message, data.last_error.operation || "backend", data.last_error.at)
+            }
             error = data.error ? String(data.error) : ""
         } else {
             devices = Array.isArray(data.devices) ? data.devices : []
             if (data.error) error = String(data.error)
         }
+        var message = data.error ? String(data.error) : ""
+        if (message && observedReadErrors[readKind] !== message && !data.last_error) captureError(message, readKind)
+        observedReadErrors = merged(observedReadErrors, readKind === "status" ? {status: message} : {devices: message})
     }
+    property Timer releasePoll: Timer { interval: 6 * 60 * 60 * 1000; repeat: true; running: true; onTriggered: service.checkUpdates(false) }
     property Timer debounce: Timer { interval: 120; onTriggered: service.commitPending() }
     property Timer poll: Timer { interval: 4000; repeat: true; running: service.active; onTriggered: service.refresh() }
     property Process action: Process {
         stdout: StdioCollector { onStreamFinished: service.acceptAction(text) }
-        stderr: StdioCollector { onStreamFinished: { if (text.trim()) service.error = text.trim().slice(0, 500) } }
+        stderr: StdioCollector { onStreamFinished: { if (text.trim()) service.error = text.trim().slice(0, 500); if (text.trim()) service.captureError(text.trim().slice(0, 500), service.operation) } }
         onExited: function(code) {
+            service.actionInFlight = false
             if (code !== 0 && !service.error) service.error = "Could not complete " + service.operation + " (exit " + code + ")."
+            if (code !== 0) service.captureError(service.error, service.operation)
             var refreshDoctor = service.operation === "pair" && code === 0 && service.pairSucceeded
+            var reload = service.operation === "update" && code === 0 && service.updateReloadRequired
             Qt.callLater(function() {
+                if (reload) { service.pluginReload.running = true; return }
                 if (refreshDoctor) service.enqueue(["doctor"], "doctor")
                 else service.next()
                 if (!service.busy) service.refresh()
@@ -254,9 +396,11 @@ QtObject {
     }
     property Process read: Process {
         stdout: StdioCollector { onStreamFinished: service.acceptRead(text) }
-        stderr: StdioCollector { onStreamFinished: { if (text.trim() && service.readRevision === service.revision && !service.busy) service.error = text.trim().slice(0, 500) } }
+        stderr: StdioCollector { onStreamFinished: { if (text.trim() && service.readRevision === service.revision && !service.busy) service.error = text.trim().slice(0, 500); if (text.trim() && service.readRevision === service.revision && !service.busy) service.captureError(text.trim().slice(0, 500), service.readKind) } }
         onExited: function(code) {
             if (code !== 0 && !service.error && service.readRevision === service.revision && !service.busy) service.error = "Zorya is unavailable. Open Setup to diagnose the backend."
+            if (code !== 0 && service.error) service.captureError(service.error, service.readKind)
+            if (service.queue.length && service.queue[0].kind === "update") { Qt.callLater(service.next); return }
             if (service.readKind === "status" && code === 0) {
                 Qt.callLater(function() {
                     if (service.busy) return
@@ -267,5 +411,5 @@ QtObject {
             } else if (service.refreshRequested) Qt.callLater(service.refresh)
         }
     }
-    Component.onCompleted: { refresh(); if (active && !planRequested) requestPlan(false) }
+    Component.onCompleted: { refresh(); if (active && !planRequested) requestPlan(false); if (!updateChecked) checkUpdates(false) }
 }

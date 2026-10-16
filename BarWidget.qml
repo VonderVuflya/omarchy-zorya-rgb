@@ -32,8 +32,9 @@ Ui.BarWidget {
         id: button
         anchors.fill: parent
         bar: widget.bar
-        text: "\udb80\udd2b"
-        tooltipText: "ZoryaRGB"
+        text: widget.panel && widget.panel.backend.updateAvailable ? "↑" : "\udb80\udd2b"
+        tooltipText: widget.panel && widget.panel.backend.updateAvailable
+            ? "ZoryaRGB · Update to " + widget.panel.backend.updateInfo.latest_version : "ZoryaRGB"
         onPressed: function(mouseButton) { if (mouseButton === Qt.LeftButton) widget.togglePanel() }
     }
 }

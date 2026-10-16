@@ -35,7 +35,8 @@ Ui.Panel {
     readonly property var unboundWireless: root.backend.diagnostics && Array.isArray(root.backend.diagnostics.wireless_devices)
         ? root.backend.diagnostics.wireless_devices.filter(function(device) { return device.is_unbound_wireless === true }) : []
     property int page: 0
-    property bool setupDetails: false
+    property bool updateReview: false
+    property bool supportVisible: false
     property bool setupAdvanced: false
     property string manualComponent: ""
 
@@ -201,7 +202,17 @@ Ui.Panel {
                         }
                     }
                     Item { Layout.fillWidth: true }
+                    RoundedButton {
+                        objectName: "updateIndicator"
+                        visible: root.backend.updateAvailable
+                        text: "↑"
+                        Accessible.name: "Update ZoryaRGB to " + (root.backend.updateInfo ? root.backend.updateInfo.latest_version : "")
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Update · " + (root.backend.updateInfo ? root.backend.updateInfo.latest_version : "")
+                        onClicked: { root.updateReview = true; root.page = 2 }
+                    }
                     Switch {
+                        enabled: !root.backend.updateInstalling
                         text: "Lights"
                         checked: root.backend.state.on === true
                         onToggled: root.backend.update({on: checked})
@@ -228,6 +239,21 @@ Ui.Panel {
                         wrapMode: Text.Wrap
                         font.pixelSize: 12
                     }
+                }
+                RowLayout {
+                    visible: root.backend.lastError !== ""
+                    Layout.fillWidth: true
+                    Label {
+                        text: "Last error · " + root.backend.lastErrorOperation + ": " + root.backend.lastError
+                        textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 11
+                        maximumLineCount: 3; elide: Text.ElideRight
+                    }
+                    RoundedButton {
+                        text: "Create issue"
+                        enabled: !root.backend.reportBusy && !root.backend.updateInstalling
+                        onClicked: { root.supportVisible = true; root.page = 2; root.backend.prepareReport() }
+                    }
+                    RoundedButton { text: "×"; Accessible.name: "Dismiss last error"; onClicked: root.backend.lastError = "" }
                 }
                 RowLayout {
                     visible: root.backend.needsSetup && root.page !== 2
@@ -455,6 +481,45 @@ Ui.Panel {
                             visible: root.page === 2
                             Layout.fillWidth: true
                             spacing: 12
+                            Label { text: "UPDATES"; font.letterSpacing: 2; font.pixelSize: 11; opacity: 0.65 }
+                            Label {
+                                text: root.backend.updateChecking ? "Checking GitHub releases…"
+                                    : root.backend.updateAvailable ? "Version " + root.backend.updateInfo.latest_version + " is available · installed " + root.backend.updateInfo.installed_version
+                                    : root.backend.updateInfo ? "ZoryaRGB " + root.backend.updateInfo.installed_version + " is up to date."
+                                    : "Check GitHub for the latest release."
+                                textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap
+                            }
+                            Label {
+                                visible: root.backend.updateError !== ""
+                                text: root.backend.updateError
+                                textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap
+                            }
+                            RowLayout {
+                                RoundedButton { text: "Check for updates"; enabled: !root.backend.updateChecking && !root.backend.updateInstalling; onClicked: root.backend.checkUpdates(true) }
+                                RoundedButton { visible: root.backend.updateAvailable; text: "Review update"; onClicked: root.updateReview = !root.updateReview }
+                            }
+                            Label { visible: root.backend.updateMessage !== ""; text: root.backend.updateMessage; textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                            ColumnLayout {
+                                visible: root.updateReview && root.backend.updateAvailable
+                                Layout.fillWidth: true
+                                Label {
+                                    text: "Install ZoryaRGB " + (root.backend.updateInfo ? root.backend.updateInfo.latest_version : "") + "? The current installation is backed up for rollback. Installation waits for pending lighting changes and setup, then may reload this panel."
+                                    textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
+                                }
+                                RowLayout {
+                                    RoundedButton {
+                                        text: "Release notes"
+                                        enabled: root.backend.updateInfo !== null && !!root.backend.updateInfo.release_url
+                                        onClicked: Qt.openUrlExternally(root.backend.updateInfo.release_url)
+                                    }
+                                    RoundedButton {
+                                        objectName: "installUpdate"
+                                        text: root.backend.updateInstalling ? "Update queued / installing…" : "Install update"
+                                        enabled: !root.backend.updateInstalling && !root.backend.reportBusy
+                                        onClicked: root.backend.installUpdate()
+                                    }
+                                }
+                            }
                             Label { text: "SET UP ZORYA"; font.letterSpacing: 2; font.pixelSize: 11; opacity: 0.65 }
                             Label {
                                 text: root.backend.planLoading ? "Checking what this computer needs…"
@@ -575,16 +640,71 @@ Ui.Panel {
                                 }
                             }
                             RoundedButton { visible: root.setupAdvanced; text: "Restore lighting"; enabled: !root.backend.busy; onClicked: root.backend.command(["restore"]) }
-                            RoundedButton { text: root.setupDetails ? "Hide details" : "Show details"; onClicked: root.setupDetails = !root.setupDetails }
-                            TextArea {
-                                visible: root.setupDetails && root.backend.diagnostics !== null
+                            RoundedButton {
+                                visible: root.setupAdvanced
+                                text: "Prepare diagnostic report"
+                                enabled: !root.backend.reportBusy && !root.backend.updateInstalling
+                                onClicked: { root.supportVisible = true; root.backend.prepareReport() }
+                            }
+                            ColumnLayout {
+                                visible: root.supportVisible
                                 Layout.fillWidth: true
-                                readOnly: true
-                                selectByMouse: true
-                                text: root.backend.diagnostics ? JSON.stringify(root.backend.diagnostics, null, 2) : ""
-                                textFormat: Text.PlainText
-                                wrapMode: Text.Wrap
-                                font.family: "monospace"; font.pixelSize: 10
+                                Label { text: "ISSUE PREVIEW"; font.letterSpacing: 2; font.pixelSize: 11; opacity: 0.65 }
+                                Label {
+                                    text: root.backend.supportReport && root.backend.supportReport.submit_available === true
+                                        ? "Review the sanitized report below. Create GitHub issue sends the full report to GitHub. You can also open the browser form to edit it first."
+                                        : "Review the sanitized report below. Open GitHub to edit and submit it yourself. The report stays local until you choose to share it."
+                                    Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
+                                }
+                                Label { visible: root.backend.reportBusy; text: root.backend.reportOperation === "submit" ? "Creating GitHub issue…" : root.backend.reportOperation === "copy" ? "Copying full report…" : "Preparing diagnostic report…"; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                                Label { visible: root.backend.reportError !== ""; text: root.backend.reportError; textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                                RoundedButton { visible: root.backend.reportError !== ""; text: root.backend.reportOperation === "submit" ? "Retry creating issue" : root.backend.reportOperation === "copy" ? "Retry copy" : "Retry report"; enabled: !root.backend.reportBusy && !root.backend.updateInstalling; onClicked: root.backend.retrySupport() }
+                                Label {
+                                    visible: root.backend.supportReport !== null
+                                    text: root.backend.supportReport ? root.backend.supportReport.title : ""
+                                    textFormat: Text.PlainText; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap
+                                }
+                                Label {
+                                    visible: root.backend.supportReport !== null && root.backend.supportReport.issue_truncated === true
+                                    text: root.backend.supportReport && root.backend.supportReport.submit_available === true
+                                        ? "The browser form includes a shortened report because of GitHub’s URL limit. Create GitHub issue sends the full report."
+                                        : "The browser form includes a shortened report because of GitHub’s URL limit. Copy full report and paste it into the GitHub issue to include all diagnostics."
+                                    Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
+                                }
+                                TextArea {
+                                    objectName: "supportPreview"
+                                    visible: root.backend.supportReport !== null
+                                    Layout.fillWidth: true
+                                    readOnly: true; selectByMouse: true
+                                    text: root.backend.supportReport ? root.backend.supportReport.body : ""
+                                    textFormat: TextEdit.MarkdownText
+                                    wrapMode: Text.Wrap; font.pixelSize: 11
+                                }
+                                RoundedButton {
+                                    objectName: "submitGithubIssue"
+                                    visible: root.backend.supportReport !== null && root.backend.supportReport.submit_available === true
+                                    text: root.backend.createdIssueUrl ? "Issue created" : "Create GitHub issue"
+                                    enabled: !root.backend.reportBusy && !root.backend.updateInstalling && !root.backend.createdIssueUrl
+                                    onClicked: root.backend.submitReport()
+                                }
+                                RowLayout {
+                                    visible: root.backend.supportReport !== null
+                                    RoundedButton {
+                                        visible: !root.backend.createdIssueUrl
+                                        objectName: "openGithubIssue"
+                                        text: "Open browser form"
+                                        enabled: !root.backend.reportBusy && !root.backend.updateInstalling
+                                        onClicked: Qt.openUrlExternally(root.backend.supportReport.issue_url)
+                                    }
+                                    RoundedButton {
+                                        visible: root.backend.createdIssueUrl !== ""
+                                        text: "Open created issue"
+                                        onClicked: Qt.openUrlExternally(root.backend.createdIssueUrl)
+                                    }
+                                    RoundedButton { text: "Copy full report"; enabled: !root.backend.reportBusy && !root.backend.updateInstalling; onClicked: root.backend.copyReport() }
+                                }
+                                Label { visible: root.backend.supportMessage !== ""; text: root.backend.supportMessage; textFormat: Text.PlainText; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                                RoundedButton { text: "Close preview"; onClicked: root.supportVisible = false }
                             }
                         }
                     }
