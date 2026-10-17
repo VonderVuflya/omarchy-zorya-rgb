@@ -54,3 +54,17 @@ class ErrorCaptureTests(unittest.TestCase):
             first=daemon.status()['last_error']['at']
             daemon._remember_error('🔥'*4000,'hardware','🔥'*16000)
             self.assertEqual(daemon.status()['last_error']['at'],first)
+
+    def test_successful_first_connection_does_not_record_an_error(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as folder:
+            backend=Mock();backend.connected=False;backend.error=None;backend.devices.return_value=[]
+            backend.connect.side_effect=lambda:setattr(backend,'connected',True)
+            daemon=ZoryaDaemon(store=StateStore(Path(folder)/'state.json'),backend=backend)
+            class Wake:
+                def clear(self):pass
+                def wait(self, interval):daemon.stopping.set()
+            daemon.wake=Wake()
+            daemon._hardware_loop()
+            self.assertIsNone(daemon.status()['last_error'])
+            self.assertIsNone(daemon.status()['error'])
