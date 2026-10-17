@@ -188,7 +188,7 @@ class ZoryaDaemon:
                         with self.lock: self.force=True
                     self._cache()
                     with self.lock:
-                        self.error=self.backend.error or 'OpenRGB SDK unavailable; run doctor or setup'
+                        self.error=self.backend.error or (None if self.backend.connected else 'OpenRGB SDK unavailable; run doctor or setup')
                         self.applying=False
                 else:
                     if now>=next_discovery:

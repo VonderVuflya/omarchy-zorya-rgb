@@ -44,3 +44,7 @@ Errors SHALL remain available after recovery, and users SHALL be able to preview
 #### Scenario: Report changes or submission outcome is uncertain
 - **WHEN** the saved report no longer matches the preview or an earlier request might have created an issue
 - **THEN** automatic retry is refused and the user receives a clear recovery action.
+
+#### Scenario: First connection succeeds
+- **WHEN** the daemon successfully connects on its initial discovery iteration
+- **THEN** no unavailable-SDK error is recorded as a historical failure.
