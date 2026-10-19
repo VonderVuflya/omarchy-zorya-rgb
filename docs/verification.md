@@ -52,3 +52,9 @@ Eight OpenSpec changes, production QML, clean-export manifest validation, Python
 ## Startup-report follow-up, version 0.3.1
 
 The first real0.3.0 release-tag deployment succeeded on the reference PC, synchronizing UI/app/runtime versions and preserving all seven selected controllers, saved color and service health. It exposed a pre-existing successful-connect fallback message newly retained by error history. A failing regression reproduced that first iteration; the fallback now applies only when discovery remains disconnected.210 tests and strict OpenSpec/QML checks passed. No issue was submitted during verification.
+
+## Stable Python runtime, version 0.3.2
+
+An Omarchy/mise update moved the reference PC's `latest` Python alias from3.14 to3.15 while its private SDK remained under python3.14. Rebuilding the private environment with distribution Python3.14.8 restored OpenRGB imports and six controllers without changing the saved scene. The separate UNI FAN TL wireless group reports unbound in the bridge; this fix does not claim to repair pairing.
+
+216 tests passed with pinned openrgb-python0.3.6. Six runtime regressions cover resolved aliases/copied interpreter creation, rollback without overwriting external Python, daemon restart before returning, isolated checkout imports and installed-launcher fallback. The two independent review findings were reproduced as failing tests, fixed and rechecked without remaining blockers. Nine OpenSpec changes, QML, clean-export manifest, Python compilation and whitespace checks passed. QML retains its existing ColorWheel id-shadow warning. No new physical suspend or clean hardware build was performed; remote CI was not run.

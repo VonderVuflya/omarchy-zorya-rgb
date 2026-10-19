@@ -12,11 +12,11 @@ import sys
 
 ROOT=Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT))
-from zorya_rgb import hardware
+from zorya_rgb import hardware, runtime
 
 
 def run(argv,timeout=600):
-    subprocess.run([str(a) for a in argv],check=True,timeout=timeout)
+    subprocess.run([str(a) for a in argv],check=True,timeout=timeout,env=runtime.clean_env())
 
 
 def quote(value):
@@ -38,9 +38,7 @@ def install(data, *, runtime_only=False):
     for name in ('pyproject.toml','LICENSE','manifest.json'):
         if ROOT!=app and (ROOT/name).exists():shutil.copy2(ROOT/name,app/name)
     env=data/'venv'
-    run([sys.executable,'-m','venv',env])
-    python=env/'bin/python'
-    run([python,'-m','pip','install','--disable-pip-version-check',str(app)+'[hardware]'])
+    python=runtime.prepare(data,app,run)
     for file in ROOT.iterdir():
         if ROOT!=app and file.suffix in ('.qml','.js'):shutil.copy2(file,app/file.name)
     if ROOT!=app and (ROOT/'qml').is_dir():shutil.copytree(ROOT/'qml',app/'qml',dirs_exist_ok=True)
@@ -51,7 +49,7 @@ def install(data, *, runtime_only=False):
         if (ROOT/'qml').is_dir():shutil.copytree(ROOT/'qml',plugin/'qml',dirs_exist_ok=True)
     # CLI dispatcher avoids relying on the invoking desktop shell's PATH.
     launcher=data/'bin/zorya-rgb';launcher.parent.mkdir(exist_ok=True)
-    launcher.write_text('#!'+str(python)+'\nimport sys\nsys.path.insert(0, '+repr(str(app))+')\nfrom zorya_rgb.cli import main\nraise SystemExit(main())\n');launcher.chmod(0o755)
+    launcher.write_text(runtime.launcher(python,app));launcher.chmod(0o755)
     if not runtime_only:
         plugin_bin=plugin/'bin';plugin_bin.mkdir(exist_ok=True)
         wrapper=plugin_bin/'zorya-rgb'

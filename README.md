@@ -33,6 +33,8 @@ Alternatively, install from a checkout:
 ./bin/zorya-rgb install
 ```
 
+If an OS update leaves `No module named openrgb`, open **Setup** and run the required runtime step. Runtime rebuilding preserves saved scenes and hardware setup. New environments use distribution Python independently of mise’s `latest` alias; a distribution Python ABI change can still require rebuilding.
+
 The runtime installer creates a private Python environment, installs `openrgb-python`, registers the user daemon and installs the panel. Select the devices you want Zorya to control. An empty selection means **no devices**, not all devices.
 
 To import the old RGB plugin's selected devices and color:

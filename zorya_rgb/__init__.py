@@ -1,2 +1,2 @@
 """Zorya: native Omarchy controls for supported RGB hardware."""
-__version__ = '0.3.1'
+__version__ = '0.3.2'

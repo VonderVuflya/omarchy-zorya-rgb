@@ -3,12 +3,14 @@
 # private runtime exists. Once installed, use its pinned optional SDK.
 source_root=$(CDPATH= cd -- "${0%/*}/.." && pwd) || exit 1
 runtime="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-zorya-rgb/venv/bin/python"
-if [ -x "$runtime" ]; then
+if [ -x "$runtime" ] && /usr/bin/env -u PYTHONHOME -u PYTHONPATH -u PYTHONEXECUTABLE -u __PYVENV_LAUNCHER__ "$runtime" -I -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' >/dev/null 2>&1; then
     python="$runtime"
+elif [ -x /usr/bin/python3 ]; then
+    python=/usr/bin/python3
 elif command -v python3 >/dev/null 2>&1; then
     python=python3
 else
     printf '%s\n' '{"ok":false,"error":"Python 3.11 or newer is required to prepare ZoryaRGB.","hint":"Install your distribution Python package, then reopen Setup."}'
     exit 1
 fi
-exec "$python" -c 'import sys; sys.path.insert(0,sys.argv.pop(1)); from zorya_rgb.cli import main; sys.exit(main())' "$source_root" "$@"
+exec /usr/bin/env -u PYTHONHOME -u PYTHONPATH -u PYTHONEXECUTABLE -u __PYVENV_LAUNCHER__ "$python" -I -c 'import sys; sys.path.insert(0,sys.argv.pop(1)); from zorya_rgb.cli import main; sys.exit(main())' "$source_root" "$@"
