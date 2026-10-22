@@ -10,7 +10,7 @@ A project review found failures that affect users before any new feature: OpenRG
 - Hardware setup on Arch installs only missing packages and never `systemd` or `python`; interrupted source checkouts recover; installation metadata writes are atomic and corrupt metadata is reported.
 - Successful updates keep one source backup and the newest failed copy.
 - Panel: Setup opens first while setup is needed, the device empty state links to Setup and Rescan, polling backs off while the backend fails, accessibility names are shorter, executable paths are URL-decoded.
-- Prepare CI with a version consistency check; activation needs a token with workflow permission.
+- Activate CI with a version consistency check.
 
 ## Impact
 No new dependencies. No new privileged operations; the Arch package request becomes narrower. Saved state written by a newer release loses only fields this release does not understand. Release 0.3.3.
