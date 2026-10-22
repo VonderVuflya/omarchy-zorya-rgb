@@ -235,6 +235,18 @@ def _verify_runtime(version):
     raise ValueError('Restarted Zorya daemon did not report release '+version+' within six seconds')
 
 
+def _prune_backups(target, keep):
+    """Keep the backup from this update and the newest failed copy; only this target's exact prefixes are touched."""
+    before = '.'+target.name+'.before-update-'
+    failed = '.'+target.name+'.failed-update-'
+    copies = [p for p in target.parent.iterdir() if p.name.startswith((before, failed)) and p.is_dir() and not p.is_symlink()]
+    failed_copies = [p for p in copies if p.name.startswith(failed)]
+    newest = max(failed_copies, key=lambda p: p.stat().st_ctime, default=None)
+    stale = [p for p in copies if p.name.startswith(before) and p != keep] + [p for p in failed_copies if p != newest]
+    for path in stale:
+        shutil.rmtree(path)
+
+
 def apply(tag):
     """Install exactly the confirmed release with source backups and rollback."""
     result = dict(ok=False, error=None, tag=tag)
@@ -278,6 +290,9 @@ def apply(tag):
             _verify_runtime(tag[1:])
         finally:
             shutil.rmtree(plugin_stage)
+        for target, backup in swaps:
+            try:_prune_backups(target, backup)
+            except OSError:pass  # Cleanup failure must not turn a completed update into a rollback.
         result.update(ok=True, installed_version=tag[1:], latest_version=tag[1:],
                       backups=[str(backup) for _,backup in swaps], state_preserved=True, reload_required=True)
     except (OSError, ValueError, KeyError, TypeError, SyntaxError, subprocess.SubprocessError) as error:

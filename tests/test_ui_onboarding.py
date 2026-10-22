@@ -161,3 +161,15 @@ ShellRoot {
         self.assertEqual(calls.count(['onboarding', 'plan']), 3)
         self.assertEqual([args[-1] for args in calls if args[:2] == ['onboarding', 'run']],
                          ['runtime', 'openrgb', 'lianli', 'verify'])
+
+    def test_panel_source_guards(self):
+        root = ROOT
+        panel = (root / 'Panel.qml').read_text()
+        service = (root / 'Service.qml').read_text()
+        self.assertNotIn('Color & effects', panel)
+        self.assertIn('Color and effects', panel)
+        self.assertIn('Accessible.role: Accessible.AlertMessage', panel)
+        self.assertIn('text: "Rescan"', panel)
+        self.assertIn('decodeURIComponent(', service)
+        self.assertIn('pollFailures', service)
+        self.assertNotIn('Home selects white', (root / 'ColorWheel.qml').read_text().split('Accessible.description')[0])

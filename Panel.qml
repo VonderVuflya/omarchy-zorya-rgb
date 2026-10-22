@@ -40,7 +40,23 @@ Ui.Panel {
     property bool setupAdvanced: false
     property string manualComponent: ""
 
-    function open() { root.controller.show(); root.backend.refresh() }
+    // First run lands on Setup once; any manual tab choice cancels the redirect.
+    property bool setupRedirectPending: false
+    onOpenedChanged: {
+        setupRedirectPending = opened
+        if (opened) root.redirectToSetup()
+    }
+    function redirectToSetup() {
+        if (!setupRedirectPending || !backend.needsSetup) return
+        setupRedirectPending = false
+        page = 2
+    }
+    Connections {
+        target: root.backend
+        function onNeedsSetupChanged() { root.redirectToSetup() }
+    }
+
+    function open() { root.controller.show(); root.backend.userRefresh() }
     function close() { root.controller.hide() }
     // Omarchy injects a capability facade; navigation is an optional dynamic API.
     // qmllint disable missing-property
@@ -82,6 +98,7 @@ Ui.Panel {
     component RoundedTabButton: TabButton {
         id: tabControl
         hoverEnabled: true
+        onClicked: root.setupRedirectPending = false
         background: Rectangle {
             implicitHeight: 25
             radius: 8
@@ -231,6 +248,8 @@ Ui.Panel {
                     implicitHeight: notice.implicitHeight + 16
                     radius: 8
                     color: Qt.rgba(1, 0.45, 0.3, 0.12)
+                    Accessible.role: Accessible.AlertMessage
+                    Accessible.name: notice.text
                     Label {
                         id: notice
                         anchors.fill: parent; anchors.margins: 8
@@ -268,7 +287,7 @@ Ui.Panel {
                     Layout.fillWidth: true
                     currentIndex: root.page
                     onCurrentIndexChanged: root.page = currentIndex
-                    RoundedTabButton { text: "Color & effects" }
+                    RoundedTabButton { text: "Color and effects" }
                     RoundedTabButton { text: "Devices" }
                     RoundedTabButton { text: "Setup" }
                 }
@@ -475,7 +494,16 @@ Ui.Panel {
                                     }
                                 }
                             }
-                            Label { visible: !root.backend.devices.length; text: "No devices discovered. Check your backend and permissions in Setup."; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                            ColumnLayout {
+                                visible: !root.backend.devices.length
+                                Layout.fillWidth: true
+                                spacing: 8
+                                Label { text: "No devices discovered. Check your backend and permissions in Setup."; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                                RowLayout {
+                                    RoundedButton { text: "Open Setup"; onClicked: root.page = 2 }
+                                    RoundedButton { text: "Rescan"; enabled: !root.backend.busy; onClicked: root.backend.userRefresh() }
+                                }
+                            }
                         }
                         ColumnLayout {
                             visible: root.page === 2

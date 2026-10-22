@@ -1,5 +1,9 @@
 name: Checks
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
 permissions:
   contents: read
 jobs:
@@ -13,12 +17,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
       - run: python -m pip install '.[hardware]'
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q zorya_rgb scripts
+  metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python scripts/check-versions.py
+      - run: git diff --check $(git hash-object -t tree /dev/null) HEAD -- . ':!patches' ':!*.png'
   openspec:
     runs-on: ubuntu-latest
     steps:

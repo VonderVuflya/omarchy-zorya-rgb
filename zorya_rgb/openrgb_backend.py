@@ -49,6 +49,7 @@ class OpenRGBBackend:
             raise ValueError('OpenRGB endpoints must be loopback')
         self.clients=[]; self.controllers={}; self.connected=False; self.error=None
         self.endpoint_errors={}; self.device_errors={}; self.identity_warnings={}; self._prepared={}; self._last_frame={}; self._retry_after={}
+        self._device_endpoints={}; self.refresh_requested=False
 
     def connect(self):
         self.close(); self.endpoint_errors={}
@@ -76,7 +77,7 @@ class OpenRGBBackend:
         return self.connected
 
     def _discover(self):
-        controllers={}; origins={}; counts={}; identity_ids={}
+        controllers={}; origins={}; counts={}; identity_ids={}; device_endpoints={}
         for endpoint,client in self.clients:
             for index,device in enumerate(client.devices):
                 if device is None: continue
@@ -99,7 +100,7 @@ class OpenRGBBackend:
                 counts[digest]=counts.get(digest,0)+1
                 suffix='' if counts[digest]==1 else ':'+str(counts[digest])
                 identifier='openrgb:'+digest+suffix
-                controllers[identifier]=device
+                controllers[identifier]=device; device_endpoints[identifier]=endpoint
                 identity_ids.setdefault(digest,[]).append(identifier)
         self.identity_warnings={identifier:'SDK identity is ambiguous; controller ordering distinguishes these devices'
                                 for identifiers in identity_ids.values() if len(identifiers)>1 for identifier in identifiers}
@@ -111,9 +112,10 @@ class OpenRGBBackend:
                 self._last_frame.pop(identity,None)
                 self._retry_after.pop(identity,None)
                 self.device_errors.pop(identity,None)
-        self.controllers=controllers
+        self.controllers=controllers; self._device_endpoints=device_endpoints
 
     def refresh(self):
+        self.refresh_requested=False
         for endpoint,client in list(self.clients):
             try: client.update()
             except Exception as exc:
@@ -215,9 +217,15 @@ class OpenRGBBackend:
         selected=set(state['devices'])
         errors={identity:'Selected device unavailable: '+identity for identity in selected-self.controllers.keys()}
         signature=tuple((key,str(state[key])) for key in ('on','color','brightness','effect','speed','secondary_color'))
+        dropped=set()
         for identity,device in self.controllers.items():
             if identity not in selected:
                 self._prepared.pop(identity,None); self._last_frame.pop(identity,None)
+                continue
+            if self._device_endpoints.get(identity) in dropped:
+                # Another device's failure closed this shared SDK socket; it is
+                # not this device's fault, so reconnect instead of a retry delay.
+                errors[identity]='OpenRGB connection reset; reconnecting'; self._prepared.pop(identity,None)
                 continue
             if not force and elapsed < self._retry_after.get(identity,0):
                 errors[identity]=self.device_errors.get(identity,"Device retry pending")
@@ -250,10 +258,18 @@ class OpenRGBBackend:
                 errors[identity]=str(exc); self.device_errors[identity]=str(exc)
                 self._retry_after[identity]=elapsed+5
                 self._prepared.pop(identity,None)
+                endpoint=self._device_endpoints.get(identity)
+                if endpoint is not None and self._endpoint_dropped(endpoint):
+                    dropped.add(endpoint); self.refresh_requested=True
         return {'errors':errors,'applied':not errors}
+
+    def _endpoint_dropped(self,endpoint):
+        client=next((c for e,c in self.clients if e==endpoint),None)
+        comms=getattr(client,'comms',None)
+        return comms is not None and getattr(comms,'sock',True) is None
 
     def close(self):
         for _,client in self.clients:
             try: client.disconnect()
             except Exception: pass
-        self.clients=[]; self.controllers={}; self._prepared={}; self._last_frame={}; self._retry_after={}; self.connected=False
+        self.clients=[]; self.controllers={}; self._prepared={}; self._last_frame={}; self._retry_after={}; self._device_endpoints={}; self.connected=False

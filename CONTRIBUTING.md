@@ -7,3 +7,18 @@ Run Python tests, OpenSpec validation, Omarchy manifest validation and QML check
 Avoid personal paths, access tokens and raw hardware serials in source, fixtures or public reports. Keep third-party source pins, patches and license notices together. Do not silently broaden hardware writes or package installation behavior.
 
 Marketplace publication uses the [official submission form](https://github.com/omacom/omarchy-plugin-marketplace/issues/new?template=submit-plugin.yml). Source publication and marketplace listing are separate operations; a listing is subject to maintainer review.
+
+## Local checks
+
+```sh
+python -m venv /tmp/zorya-dev
+/tmp/zorya-dev/bin/pip install '.[hardware]'
+/tmp/zorya-dev/bin/python -m unittest discover -s tests -v
+python scripts/check-versions.py
+npm ci --ignore-scripts
+npm run spec:validate
+omarchy plugin validate "$HOME/.config/omarchy/plugins/vondervuflya.zorya-rgb"
+python scripts/check-qml.py
+```
+
+Tests that need Qt/Quickshell skip when those tools are unavailable. CI runs the Python, version and OpenSpec checks; QML and manifest validation against the installed shell stay local.

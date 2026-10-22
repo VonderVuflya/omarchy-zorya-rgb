@@ -7,7 +7,7 @@ import Quickshell.Io
 
 QtObject {
     id: service
-    property string executable: String(Qt.resolvedUrl("bin/zorya-rgb")).replace(/^file:\/\//, "")
+    property string executable: decodeURIComponent(String(Qt.resolvedUrl("bin/zorya-rgb")).replace(/^file:\/\//, ""))
     property var state: ({on: true, color: "#FFFFFF", brightness: 100, effect: "static", speed: 1, secondary_color: "#8A6CFF", devices: [], presets: [], connected: false})
     property var devices: []
     property var diagnostics: null
@@ -37,6 +37,7 @@ QtObject {
     property string reportStderr: ""
     property string reportOperation: ""
     property bool active: false
+    property int pollFailures: 0
     readonly property bool busy: planLoading || setupRunning || action.running || actionInFlight || queue.length > 0 || Object.keys(pending).length > 0
     property string operation: ""
     property var pending: ({})
@@ -294,6 +295,7 @@ QtObject {
         enqueue(["set", "--json", JSON.stringify(patch)], "set")
     }
     function enqueue(args, kind) {
+        pollFailures = 0
         var jobs = queue.slice()
         // Coalesce consecutive pending writes, preserving preset/setup order.
         if (kind === "set" && jobs.length && jobs[jobs.length - 1].kind === "set") {
@@ -333,6 +335,8 @@ QtObject {
         try { return JSON.parse(text) }
         catch (exception) { error = "Zorya returned an invalid response."; captureError(error, context || "backend"); return null }
     }
+    // Explicit user actions and panel opens poll at the base rate again.
+    function userRefresh() { pollFailures = 0; refresh() }
     function refresh() {
         if (read.running || busy) { refreshRequested = true; return }
         refreshRequested = false
@@ -371,12 +375,13 @@ QtObject {
             if (data.error) error = String(data.error)
         }
         var message = data.error ? String(data.error) : ""
+        pollFailures = message ? pollFailures + 1 : 0
         if (message && observedReadErrors[readKind] !== message && !data.last_error) captureError(message, readKind)
         observedReadErrors = merged(observedReadErrors, readKind === "status" ? {status: message} : {devices: message})
     }
     property Timer releasePoll: Timer { interval: 6 * 60 * 60 * 1000; repeat: true; running: true; onTriggered: service.checkUpdates(false) }
     property Timer debounce: Timer { interval: 120; onTriggered: service.commitPending() }
-    property Timer poll: Timer { interval: 4000; repeat: true; running: service.active; onTriggered: service.refresh() }
+    property Timer poll: Timer { interval: Math.min(30000, 4000 * Math.pow(2, Math.min(service.pollFailures, 3))); repeat: true; running: service.active; onTriggered: service.refresh() }
     property Process action: Process {
         stdout: StdioCollector { onStreamFinished: service.acceptAction(text) }
         stderr: StdioCollector { onStreamFinished: { if (text.trim()) service.error = text.trim().slice(0, 500); if (text.trim()) service.captureError(text.trim().slice(0, 500), service.operation) } }
@@ -399,6 +404,7 @@ QtObject {
         stderr: StdioCollector { onStreamFinished: { if (text.trim() && service.readRevision === service.revision && !service.busy) service.error = text.trim().slice(0, 500); if (text.trim() && service.readRevision === service.revision && !service.busy) service.captureError(text.trim().slice(0, 500), service.readKind) } }
         onExited: function(code) {
             if (code !== 0 && !service.error && service.readRevision === service.revision && !service.busy) service.error = "Zorya is unavailable. Open Setup to diagnose the backend."
+            if (code !== 0) service.pollFailures += 1
             if (code !== 0 && service.error) service.captureError(service.error, service.readKind)
             if (service.queue.length && service.queue[0].kind === "update") { Qt.callLater(service.next); return }
             if (service.readKind === "status" && code === 0) {

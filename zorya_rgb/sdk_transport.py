@@ -214,8 +214,12 @@ class _BoundedTransport:
             self._read_depth-=1
 
 
-def connect_client(address,port,name='ZoryaRGB',protocol_version=None):
-    """Create a client protected from its first negotiation through later reads."""
+PROTOCOL_FALLBACK=3
+FALLBACK_TTL=600.0
+_fallback_endpoints={}  # (address,port) -> monotonic time the default protocol stalled
+
+
+def _connect_once(address,port,name,protocol_version):
     from openrgb import OpenRGBClient,utils
     from openrgb.network import NetworkClient
 
@@ -246,3 +250,38 @@ def connect_client(address,port,name='ZoryaRGB',protocol_version=None):
                 return super().update()
 
     return SafeOpenRGBClient()
+
+
+def connect_client(address,port,name='ZoryaRGB',protocol_version=None):
+    """Create a client protected from its first negotiation through later reads.
+
+    openrgb-python 0.3.6 can hang negotiating the default protocol (>=4) with
+    OpenRGB 1.0. With no pinned version, a connect that times out or is closed
+    mid-negotiation is retried once with
+    protocol 3 and a fresh deadline; a working fallback is remembered per
+    endpoint for FALLBACK_TTL seconds. A pinned protocol_version is never changed.
+    """
+    if protocol_version is not None:
+        return _connect_once(address,port,name,protocol_version)
+    key=(address,port)
+    # A slow server can also stall once, so the default protocol is tried again later.
+    if time.monotonic()-_fallback_endpoints.get(key,-FALLBACK_TTL)<FALLBACK_TTL:
+        try: return _connect_once(address,port,name,PROTOCOL_FALLBACK)
+        except Exception:
+            _fallback_endpoints.pop(key,None)
+            raise
+    try: return _connect_once(address,port,name,None)
+    except Exception as first:
+        if not _stalled(first): raise  # Refused or malformed: a lower protocol cannot help.
+        try: client=_connect_once(address,port,name,PROTOCOL_FALLBACK)
+        except Exception: raise first
+        _fallback_endpoints[key]=time.monotonic()
+        return client
+
+
+def _stalled(exc):
+    """A server that ignores an unsupported protocol times out or closes the socket."""
+    while exc is not None:
+        if isinstance(exc,(TimeoutError,socket.timeout,EOFError)) or 'timed out' in str(exc): return True
+        exc=exc.__cause__ or exc.__context__
+    return False

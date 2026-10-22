@@ -11,8 +11,8 @@ Item {
     signal interactionFinished()
     activeFocusOnTab: true
     Accessible.role: Accessible.Slider
-    Accessible.name: "Color wheel. Left and right adjust hue; up and down adjust saturation; Home selects white."
-    Accessible.description: selectedColor
+    Accessible.name: "Color wheel"
+    Accessible.description: selectedColor + ". Left and right adjust hue; up and down adjust saturation; Home selects white."
 
     Canvas {
         id: canvas

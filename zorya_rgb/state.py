@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import tempfile
 import threading
+import time
 import uuid
 
 DEFAULT_STATE = {'on': True, 'color': '#FFFFFF', 'brightness': 100, 'effect': 'static',
@@ -57,25 +58,41 @@ class StateStore:
         self.lock = threading.RLock()
         self.error = None
         self._state = copy.deepcopy(DEFAULT_STATE)
+        self._corrupt=False
         if self.path.exists():
             try:
                 raw = json.loads(self.path.read_text())
                 if not isinstance(raw,dict): raise ValueError('state must be an object')
-                self._state = validate_patch(DEFAULT_STATE,{k:v for k,v in raw.items() if k != 'presets'})
-                presets = raw.get('presets',[])
-                if not isinstance(presets,list) or len(presets)>64: raise ValueError('invalid presets')
-                seen=set()
-                for preset in presets:
+            except (OSError,ValueError,TypeError) as exc:
+                self._corrupt=not isinstance(exc,OSError) or self.path.is_file()
+                self.error='Cannot read saved state: '+str(exc)
+                return
+            # Saved state may come from a newer or older release; keep what is
+            # valid instead of discarding every scene for one unknown field.
+            self._state=self._tolerant(DEFAULT_STATE,raw)
+            presets=raw.get('presets',[])
+            kept=[]; seen=set(); dropped=0
+            for preset in presets[:64] if isinstance(presets,list) else []:
+                try:
                     if not isinstance(preset,dict) or not isinstance(preset.get('id'),str) or preset['id'] in seen:
                         raise ValueError('invalid preset identity')
-                    self._name(preset.get('name'))
-                    snapshot=validate_patch(DEFAULT_STATE,preset.get('state'))
-                    preset['state']={k:snapshot[k] for k in SETTINGS}
-                    seen.add(preset['id'])
-                self._state['presets']=presets
-            except (OSError,ValueError,TypeError) as exc:
-                self._state=copy.deepcopy(DEFAULT_STATE)
-                self.error='Cannot read saved state: '+str(exc)
+                    name=self._name(preset.get('name'))
+                    if not isinstance(preset.get('state'),dict): raise ValueError('invalid preset state')
+                    snapshot=self._tolerant(DEFAULT_STATE,preset['state'])
+                    kept.append({'id':preset['id'],'name':name,'state':{k:snapshot[k] for k in SETTINGS}}); seen.add(preset['id'])
+                except (ValueError,TypeError): dropped+=1
+            if not isinstance(presets,list) or len(presets)>64: dropped+=1
+            self._state['presets']=kept
+            if dropped: self.error='Cannot read %d saved scene%s; other saved state was kept'%(dropped,'' if dropped==1 else 's')
+
+    @staticmethod
+    def _tolerant(base,raw):
+        """Validate known settings one by one; unknown or invalid keys keep defaults."""
+        result=copy.deepcopy(base)
+        for key in SETTINGS & set(raw):
+            try: result=validate_patch(result,{key:raw[key]})
+            except (ValueError,TypeError): pass
+        return result
 
     def snapshot(self):
         with self.lock: return copy.deepcopy(self._state)
@@ -89,6 +106,10 @@ class StateStore:
             with os.fdopen(fd,'w') as out:
                 json.dump(state,out,allow_nan=False,sort_keys=True)
                 out.write('\n'); out.flush(); os.fsync(out.fileno())
+            if self._corrupt:
+                # Keep the unreadable file for recovery before the first replacement.
+                os.replace(self.path,self.path.with_name(self.path.name+'.corrupt-%d'%time.time()))
+                self._corrupt=False
             os.replace(name,self.path)
             dirfd=os.open(self.path.parent,os.O_RDONLY)
             try: os.fsync(dirfd)
