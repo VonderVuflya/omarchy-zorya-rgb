@@ -241,7 +241,7 @@ def _prune_backups(target, keep):
     failed = '.'+target.name+'.failed-update-'
     copies = [p for p in target.parent.iterdir() if p.name.startswith((before, failed)) and p.is_dir() and not p.is_symlink()]
     failed_copies = [p for p in copies if p.name.startswith(failed)]
-    newest = max(failed_copies, key=lambda p: p.stat().st_ctime, default=None)
+    newest = max(failed_copies, key=lambda p: p.stat().st_mtime, default=None)
     stale = [p for p in copies if p.name.startswith(before) and p != keep] + [p for p in failed_copies if p != newest]
     for path in stale:
         shutil.rmtree(path)
@@ -302,7 +302,9 @@ def apply(tag):
             try:
                 if target.exists():
                     # Retain failed source for inspection; never delete the previous install.
-                    target.rename(target.parent/('.'+target.name+'.failed-update-'+stage.name))
+                    failed = target.parent/('.'+target.name+'.failed-update-'+stage.name)
+                    target.rename(failed)
+                    os.utime(failed)  # Names are random; mtime records when this copy failed.
                 backup.rename(target)
             except OSError as rollback_error:
                 rollback_errors.append(str(rollback_error))
