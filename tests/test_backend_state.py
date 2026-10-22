@@ -58,3 +58,37 @@ class StateTests(unittest.TestCase):
         self.assertGreater(len(set(frame(dict(DEFAULT_STATE,effect='rainbow'),8,0))),1)
 
 if __name__=='__main__': unittest.main()
+
+
+class TolerantLoadTests(unittest.TestCase):
+    def store(self,content):
+        directory=tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        path=Path(directory.name)/'state.json'; path.write_text(content if isinstance(content,str) else json.dumps(content))
+        return path,StateStore(path)
+
+    def test_unknown_key_and_effect_from_newer_release_keep_presets(self):
+        preset={'id':'a','name':'Evening','state':dict(DEFAULT_STATE,color='#112233',effect='aurora',glow=3)}
+        path,store=self.store(dict(DEFAULT_STATE,color='#00FF00',effect='aurora',future_key=1,presets=[preset]))
+        state=store.snapshot()
+        self.assertEqual(state['color'],'#00FF00'); self.assertEqual(state['effect'],'static')
+        self.assertEqual([p['name'] for p in state['presets']],['Evening'])
+        self.assertEqual(state['presets'][0]['state']['color'],'#112233'); self.assertIsNone(store.error)
+
+    def test_one_invalid_preset_is_dropped_and_others_kept(self):
+        good={'id':'a','name':'Good','state':dict(DEFAULT_STATE)}
+        path,store=self.store(dict(DEFAULT_STATE,presets=[good,{'id':5},{'id':'a','name':'Dup','state':{}}]))
+        self.assertEqual([p['name'] for p in store.snapshot()['presets']],['Good'])
+        self.assertIn('2 saved scenes',store.error)
+
+    def test_corrupt_file_is_kept_aside_before_first_write(self):
+        path,store=self.store('{not json')
+        self.assertIn('Cannot read saved state',store.error); self.assertEqual(path.read_text(),'{not json')
+        store.update({'color':'#FF0000'})
+        backups=list(path.parent.glob('state.json.corrupt-*'))
+        self.assertEqual(len(backups),1); self.assertEqual(backups[0].read_text(),'{not json')
+        self.assertEqual(json.loads(path.read_text())['color'],'#FF0000')
+
+    def test_set_commands_stay_strict(self):
+        path,store=self.store(dict(DEFAULT_STATE))
+        with self.assertRaises(ValueError): store.update({'future_key':1})
+        with self.assertRaises(ValueError): store.update({'effect':'aurora'})

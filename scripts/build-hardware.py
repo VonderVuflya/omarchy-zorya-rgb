@@ -23,7 +23,7 @@ PINS={
  'evdi':('https://github.com/DisplayLink/evdi.git','750044ce73cf2eec9178889c4f851f0ff01368b3'),
 }
 PACKAGES={
- 'arch':['base-devel','git','rustup','clang','llvm','pkgconf','libusb','hidapi','libdrm','systemd','qt5-base','mbedtls3','cmake','python'],
+ 'arch':['base-devel','git','rustup','clang','llvm','pkgconf','libusb','hidapi','libdrm','qt5-base','mbedtls3','cmake'],
  'debian':['build-essential','git','clang','llvm','pkg-config','libusb-1.0-0-dev','libudev-dev','libdrm-dev','qtbase5-dev','libhidapi-dev','libmbedtls-dev','cmake','python3-venv','python3-pip'],
  'fedora':['gcc','gcc-c++','make','git','rustup','clang','llvm','pkgconf-pkg-config','libusb1-devel','hidapi-devel','libdrm-devel','systemd-devel','qt5-qtbase-devel','mbedtls-devel','cmake','python3'],
 }
@@ -37,16 +37,36 @@ def capture(argv):
     return subprocess.check_output(argv,text=True,timeout=15).strip()
 
 
+def pacman_installed(name):
+    return subprocess.run(['pacman','-Qq',name],capture_output=True,timeout=30).returncode==0
+
+
+def arch_missing(packages):
+    """Expand groups such as base-devel to members so only absent packages are requested."""
+    missing=[]
+    for name in packages:
+        if pacman_installed(name):continue
+        members=subprocess.run(['pacman','-Sgq',name],capture_output=True,text=True,timeout=30)
+        names=members.stdout.split() if members.returncode==0 else [name]
+        missing.extend(member for member in names if member not in missing and not pacman_installed(member))
+    return missing
+
+
 def checkout(name,target):
     url,commit=PINS[name]
     if not (target/'.git').is_dir():
         target.mkdir(parents=True,exist_ok=True)
-        execute(['git','init',target]);execute(['git','-C',target,'remote','add','origin',url])
+        execute(['git','init',target])
+    # An earlier run may have created .git and origin before fetch failed; reuse them.
+    if subprocess.run(['git','-C',str(target),'remote','get-url','origin'],capture_output=True).returncode:
+        execute(['git','-C',target,'remote','add','origin',url])
+    if subprocess.run(['git','-C',str(target),'rev-parse','--verify','--quiet','HEAD'],capture_output=True).returncode:
         execute(['git','-C',target,'fetch','--depth=1','origin',commit])
         execute(['git','-C',target,'checkout','--detach',commit])
-        execute(['git','-C',target,'submodule','update','--init','--recursive'])
     actual=capture(['git','-C',str(target),'rev-parse','HEAD'])
     if actual!=commit:raise RuntimeError(f'{name} source pin mismatch: {actual}')
+    # Idempotent; also completes a checkout whose submodule step failed earlier.
+    execute(['git','-C',target,'submodule','update','--init','--recursive'])
     return target
 
 
@@ -71,14 +91,19 @@ def dependencies(component):
         if component=='lianli':ensure_rust()
         return
     if not shutil.which('pkexec'):raise RuntimeError('Missing dependencies '+', '.join(missing)+'. Install polkit/pkexec and development packages first.')
-    if shutil.which('pacman'):argv=['pkexec','pacman','-S','--needed','--noconfirm',*PACKAGES['arch']]
+    if shutil.which('pacman'):
+        # Core packages are never installed here: a partial upgrade could break the running system.
+        core=[name for name in ('systemd','python') if not pacman_installed(name)]
+        if core:raise RuntimeError('Arch core packages missing: '+', '.join(core)+'. Run a full system upgrade (pacman -Syu) first, then retry.')
+        packages=arch_missing(PACKAGES['arch'])
+        argv=['pkexec','pacman','-S','--needed','--noconfirm',*packages] if packages else None
     elif shutil.which('apt-get'):
         if component=='lianli' and not shutil.which('rustup'):
             raise RuntimeError('Lian Li source build requires rustup with stable Rust. Automatic Rust installation is currently supported on Arch; install rustup on this distribution first, then retry.')
         argv=['pkexec','apt-get','install','-y',*PACKAGES['debian']]
     elif shutil.which('dnf'):argv=['pkexec','dnf','install','-y',*PACKAGES['fedora']]
     else:raise RuntimeError('Missing dependencies: '+', '.join(missing)+'; no supported package manager found')
-    execute(argv,timeout=1800)
+    if argv:execute(argv,timeout=1800)
     missing=[tool for tool in required if not shutil.which(tool)]
     if component=='openrgb' and not mbedtls3_ready():missing.append('mbedtls3 development headers/libraries')
     if missing:raise RuntimeError('Still missing '+', '.join(missing)+'. Install the listed development dependencies before retrying.')
@@ -198,6 +223,25 @@ def rgb_only_service(service):
     except (OSError,UnicodeError):return False
     return re.search(r'(?m)^\s*exec[^\n]*\s--rgb-only(?:\s|$)',text) is not None
 
+def read_metadata(path):
+    if not path.exists():return {'hardware_units':[],'adopted':[]}
+    try:return json.loads(path.read_text())
+    except ValueError as error:raise RuntimeError('Corrupt installation metadata at '+str(path)+'; move it aside and retry: '+str(error)) from error
+
+
+def write_metadata(path,metadata):
+    """Replace installation metadata atomically so an interrupted write cannot truncate it."""
+    descriptor,temporary=tempfile.mkstemp(dir=path.parent,prefix='.'+path.name+'.')
+    try:
+        with os.fdopen(descriptor,'w') as handle:
+            handle.write(json.dumps(metadata,indent=2));handle.flush();os.fsync(handle.fileno())
+        os.chmod(temporary,0o600)
+        os.replace(temporary,path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
 def setup(component,data,adopt_only=False):
     if sys.platform!='linux':raise RuntimeError('Hardware setup requires Linux with systemd user services')
     report=hardware.doctor()
@@ -213,7 +257,7 @@ def setup(component,data,adopt_only=False):
     units=Path(os.environ.get('XDG_CONFIG_HOME',Path.home()/'.config'))/'systemd/user'
     data.mkdir(parents=True,exist_ok=True)
     metadata_path=data/'installation.json'
-    metadata=json.loads(metadata_path.read_text()) if metadata_path.exists() else {'hardware_units':[],'adopted':[]}
+    metadata=read_metadata(metadata_path)
     if not isinstance(metadata,dict):raise RuntimeError('Invalid installation metadata')
     metadata.setdefault('hardware_units',[])
     metadata.setdefault('adopted',[])
@@ -257,7 +301,7 @@ def setup(component,data,adopt_only=False):
             old['enabled']=subprocess.run(['systemctl','--user','is-enabled',old['unit']],capture_output=True).returncode==0
             if old['active'] or old['enabled']:
                 if not any(s['unit']==old['unit'] for s in metadata['adopted']):metadata['adopted'].append(old)
-                metadata_path.write_text(json.dumps(metadata,indent=2));metadata_path.chmod(0o600)
+                write_metadata(metadata_path,metadata)
                 execute(['systemctl','--user','disable','--now',old['unit']],timeout=90)
     # Previous watchers/helpers must not restore a different plugin's state.
     legacy='omarchy-rgb-resume.service'
@@ -265,9 +309,9 @@ def setup(component,data,adopt_only=False):
     legacy_enabled=subprocess.run(['systemctl','--user','is-enabled',legacy],capture_output=True).returncode==0
     if metadata['adopted'] and (legacy_active or legacy_enabled):
         if not any(s['unit']==legacy for s in metadata['adopted']):metadata['adopted'].append({'unit':legacy,'active':legacy_active,'enabled':legacy_enabled})
-        metadata_path.write_text(json.dumps(metadata,indent=2));metadata_path.chmod(0o600)
+        write_metadata(metadata_path,metadata)
         execute(['systemctl','--user','disable','--now',legacy])
-    metadata_path.write_text(json.dumps(metadata,indent=2));metadata_path.chmod(0o600)
+    write_metadata(metadata_path,metadata)
     execute(['systemctl','--user','daemon-reload'])
     if metadata['hardware_units']:execute(['systemctl','--user','enable','--now',*metadata['hardware_units']],timeout=90)
     print(json.dumps({'ok':True,'hardware_units':metadata['hardware_units'],'cooling':'preserved when adopted; fresh installation RGB-only'}))

@@ -190,3 +190,23 @@ class BackendTests(unittest.TestCase):
         self.assertFalse(b.connect()); self.assertFalse(b.connected); self.assertIn('no server',b.error)
 
 if __name__=='__main__': unittest.main()
+
+
+class SharedSocketTests(unittest.TestCase):
+    def test_dropped_shared_socket_reconnects_without_penalizing_other_devices(self):
+        sock=types.SimpleNamespace(settimeout=lambda value:None); comms=types.SimpleNamespace(sock=sock)
+        class Dropping(Device):
+            def set_mode(self,mode): comms.sock=None; raise OSError('send failed')
+        bad=Dropping(); good=Device(location='PCI:2'); clients=[]
+        def factory():
+            client=Client([bad,good] if not clients else [Device(location='PCI:1'),Device(location='PCI:2')])
+            client.comms=comms if not clients else types.SimpleNamespace(sock=sock)
+            clients.append(client); return client
+        b=OpenRGBBackend(client_factory=factory,color_factory=lambda *c:c); self.assertTrue(b.connect())
+        ids=[d['id'] for d in b.devices([])]; state=dict(DEFAULT_STATE,devices=ids)
+        result=b.apply(state,0)
+        self.assertTrue(b.refresh_requested); self.assertEqual(good.writes,[])
+        self.assertNotIn(ids[1],b._retry_after); self.assertIn('reconnecting',result['errors'][ids[1]])
+        clients[0].update=lambda:(_ for _ in ()).throw(OSError('closed'))
+        b.refresh(); self.assertFalse(b.refresh_requested); self.assertEqual(len(clients),2)
+        b.apply(state,.1); self.assertTrue(b.controllers[ids[1]].writes)

@@ -102,6 +102,22 @@ class UpdatesTests(unittest.TestCase):
         self.assertEqual(result['plugin_version'],'0.3.0');self.assertEqual(result['runtime_version'],'0.2.0')
         self.assertTrue(result['update_available'])
 
+    def test_successful_update_prunes_old_backups_and_failed_copies_only_for_this_install(self):
+        old_plugin=self.plugin.parent/'.plugin.before-update-.zorya-update-old'
+        old_app=self.data/'.app.before-update-.zorya-update-old'
+        failed_old=self.data/'.app.failed-update-.zorya-update-f1'
+        failed_new=self.data/'.app.failed-update-.zorya-update-f2'
+        unrelated=(self.data/'.app-backup-keep',self.data/'.other.before-update-x',self.data/'app.before-update-x',self.plugin.parent/'.plugin-keep')
+        for path in (old_plugin,old_app,failed_old,failed_new,*unrelated):
+            path.mkdir();(path/'marker').write_text('x')
+        os.utime(failed_old,(1000,1000));os.utime(failed_new,(2000,2000))
+        self.assertTrue(self.apply()['ok'])
+        self.assertFalse(old_plugin.exists());self.assertFalse(old_app.exists())
+        self.assertFalse(failed_old.exists());self.assertTrue(failed_new.exists())
+        for path in unrelated:self.assertTrue(path.exists())
+        for folder,prefix in ((self.plugin.parent,'.plugin.before-update-'),(self.data,'.app.before-update-')):
+            self.assertEqual(len([p for p in folder.iterdir() if p.name.startswith(prefix)]),1)
+
     def clone(self,tag,destination):
         source(destination,'0.3.0')
         subprocess.run(['/usr/bin/git','init','-q',str(destination)],check=True)
