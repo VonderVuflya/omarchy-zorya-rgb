@@ -6,5 +6,5 @@
 - [x] Update backup pruning.
 - [x] Panel first-run, empty state, polling backoff and accessibility fixes.
 - [x] Add the version consistency check to the CI workflow.
-- [ ] Activate CI in `.github/workflows` (needs a token with workflow scope).
+- [x] Activate CI in `.github/workflows`.
 - [ ] Confirm OpenRGB 1.0 connection with a reporter or a local 1.0 server.
